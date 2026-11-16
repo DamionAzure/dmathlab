@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DMath Lab</title>
+    <style>
+      /* Paint the shell before the bundle loads so there is no flash of
+         unpainted content; matches the app surface (zinc-100). */
+      html,
+      body {
+        margin: 0;
+        background-color: #f4f4f5;
+        color-scheme: light;
+      }
+      /* The main web app loads Geist via next/font and exposes the families as
+         CSS variables; the desktop shell maps the same variables to system
+         stacks so styles.css (copied 1:1) keeps working. */
+      :root {
+        --font-geist-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+          Roboto, "Helvetica Neue", Arial, sans-serif;
+        --font-geist-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", Menlo, Consolas,
+          "Liberation Mono", monospace;
+      }
+    </style>
+    <script type="module" src="/src/main.tsx"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

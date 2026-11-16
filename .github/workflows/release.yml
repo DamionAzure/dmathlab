@@ -1,0 +1,182 @@
+# One-button release: build Windows + macOS + Linux installers and a signed
+# Android APK, attach everything to a draft GitHub Release, then publish it
+# only if every build succeeded.
+#
+# Trigger it by pushing a tag (git tag v0.1.0 && git push --tags) or from the
+# Actions tab ("Run workflow"). The version comes from src-tauri/tauri.conf.json.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  NDK_VERSION: "27.0.12077973"
+  BUILD_TOOLS: "34.0.0"
+
+jobs:
+  # ── 1. Work out the version and create (or reuse) a DRAFT release ──────────
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      release_id: ${{ steps.rel.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Read and validate version
+        run: |
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          pkg=$(node -p "require('./package.json').version")
+          crate=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)
+          echo "tauri.conf=$conf package.json=$pkg Cargo.toml=$crate"
+          if [ "$conf" != "$pkg" ] || [ "$conf" != "$crate" ]; then
+            echo "::error::Versions disagree (tauri.conf.json=$conf, package.json=$pkg, Cargo.toml=$crate). Make them equal."
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$conf" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match app version v$conf."
+            exit 1
+          fi
+          echo "version=$conf" >> "$GITHUB_OUTPUT"
+          echo "tag=v$conf" >> "$GITHUB_OUTPUT"
+      - id: rel
+        name: Create draft release (or reuse an existing draft)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+                 -q ".[] | select(.tag_name==\"$TAG\") | .id" | head -n1)
+          if [ -n "$id" ]; then
+            draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/$id" -q .draft)
+            if [ "$draft" != "true" ]; then
+              echo "::error::Release $TAG is already published. Bump the version first."
+              exit 1
+            fi
+          else
+            id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+                   -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
+                   -f name="DMath Lab $TAG" -F draft=true -F generate_release_notes=true \
+                   -q .id)
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  # ── 2. Desktop installers (Windows, macOS universal, Linux) ────────────────
+  desktop:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Windows, platform: windows-latest, args: "" }
+          - { name: macOS,   platform: macos-latest,   args: "--target universal-apple-darwin" }
+          - { name: Linux,   platform: ubuntu-22.04,   args: "" }
+    name: Desktop / ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "src-tauri -> target" }
+      - if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+  # ── 3. Android APK (signed, so it actually installs) ───────────────────────
+  android:
+    needs: prepare
+    name: Android APK
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: android-actions/setup-android@v3
+      - name: Install NDK + build-tools
+        run: sdkmanager "platforms;android-34" "build-tools;${BUILD_TOOLS}" "ndk;${NDK_VERSION}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "src-tauri -> target" }
+      - run: npm ci
+      - name: Generate Android project
+        run: npx tauri android init --ci
+      - name: Build release APK (arm64 + armv7)
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          npx tauri android build --apk --target aarch64 armv7 --ci
+      - name: Align and sign
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/${BUILD_TOOLS}"
+          APK=$(find src-tauri/gen/android -name '*-release-unsigned.apk' | head -n1)
+          [ -n "$APK" ] || { echo "::error::No release APK was produced"; exit 1; }
+          if [ -n "${KS_B64:-}" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            ALIAS="$KS_ALIAS"; PASS="$KS_PASS"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_* secrets set. Signing with a throwaway key: the APK installs, but a future release signed with a different key can't update it in place. See ANDROID.md."
+            ALIAS=dmath; PASS=dmath-temp-key
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.keystore" -alias "$ALIAS" \
+              -storepass "$PASS" -keypass "$PASS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=DMath Lab"
+          fi
+          "$BT/zipalign" -p -f 4 "$APK" "$RUNNER_TEMP/aligned.apk"
+          OUT="DMath-Lab_${VERSION}_android.apk"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/release.keystore" --ks-key-alias "$ALIAS" \
+            --ks-pass "pass:$PASS" --key-pass "pass:$PASS" --out "$OUT" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" verify --verbose "$OUT"
+          echo "APK_FILE=$OUT" >> "$GITHUB_ENV"
+      - name: Attach APK to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RID: ${{ needs.prepare.outputs.release_id }}
+        run: |
+          curl -sSf -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/vnd.android.package-archive" \
+            --data-binary "@$APK_FILE" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RID/assets?name=$APK_FILE"
+
+  # ── 4. Publish only when everything above succeeded ────────────────────────
+  publish:
+    needs: [prepare, desktop, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RID: ${{ needs.prepare.outputs.release_id }}
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RID" \
+            -F draft=false -f make_latest=true

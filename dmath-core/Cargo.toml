@@ -1,0 +1,25 @@
+[package]
+name = "dmath-core"
+version = "0.1.0"
+edition = "2021"
+description = "DMath Core: a discrete mathematics DSL engine (lexer, parser, semantic analysis, interpreter, visualization IR)"
+license = "MIT"
+
+[lib]
+name = "dmath_core"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "dmath-cli"
+path = "src/bin/dmath-cli.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = true
