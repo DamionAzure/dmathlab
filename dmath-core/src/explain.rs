@@ -18,7 +18,7 @@ const LIST_CAP: usize = 36;
 
 /// The value a method arrives at.
 #[derive(Clone, Debug, PartialEq)]
-enum Val {
+pub(crate) enum Val {
     Num(i64),
     Bool(bool),
     List(Vec<i64>),
@@ -26,7 +26,7 @@ enum Val {
 
 impl Val {
     /// Same text as `Value::display` in the interpreter.
-    fn show(&self) -> String {
+    pub(crate) fn show(&self) -> String {
         match self {
             Val::Num(n) => n.to_string(),
             Val::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
@@ -37,7 +37,7 @@ impl Val {
 
 // ───────────────────────── section builder ─────────────────────────
 
-struct Sec {
+pub(crate) struct Sec {
     kind: &'static str,
     title: String,
     intro: Option<String>,
@@ -48,41 +48,41 @@ struct Sec {
 }
 
 impl Sec {
-    fn new(kind: &'static str, title: impl Into<String>) -> Sec {
+    pub(crate) fn new(kind: &'static str, title: impl Into<String>) -> Sec {
         Sec { kind, title: title.into(), intro: None, steps: Vec::new(), table: None, outcome: None, value: None }
     }
-    fn intro(mut self, t: impl Into<String>) -> Sec {
+    pub(crate) fn intro(mut self, t: impl Into<String>) -> Sec {
         self.intro = Some(t.into());
         self
     }
-    fn tone(&mut self, tone: &'static str, t: impl Into<String>) {
+    pub(crate) fn tone(&mut self, tone: &'static str, t: impl Into<String>) {
         self.steps.push(Step { text: t.into(), tone });
     }
-    fn line(&mut self, t: impl Into<String>) {
+    pub(crate) fn line(&mut self, t: impl Into<String>) {
         self.tone("plain", t);
     }
-    fn head(&mut self, t: impl Into<String>) {
+    pub(crate) fn head(&mut self, t: impl Into<String>) {
         self.tone("head", t);
     }
-    fn good(&mut self, t: impl Into<String>) {
+    pub(crate) fn good(&mut self, t: impl Into<String>) {
         self.tone("good", t);
     }
-    fn bad(&mut self, t: impl Into<String>) {
+    pub(crate) fn bad(&mut self, t: impl Into<String>) {
         self.tone("bad", t);
     }
-    fn extend(&mut self, steps: Vec<Step>) {
+    pub(crate) fn extend(&mut self, steps: Vec<Step>) {
         self.steps.extend(steps);
     }
-    fn table(&mut self, headers: &[&str], rows: Vec<Vec<String>>) {
+    pub(crate) fn table(&mut self, headers: &[&str], rows: Vec<Vec<String>>) {
         self.table = Some(StepTable { headers: headers.iter().map(|h| h.to_string()).collect(), rows });
     }
-    fn conclude(&mut self, text: impl Into<String>, v: Val) {
+    pub(crate) fn conclude(&mut self, text: impl Into<String>, v: Val) {
         self.outcome = Some(text.into());
         self.value = Some(v);
     }
 }
 
-fn finish(op: &str, expression: String, title: String, engine: Val, secs: Vec<Sec>) -> StepsIr {
+pub(crate) fn finish(op: &str, expression: String, title: String, engine: Val, secs: Vec<Sec>) -> StepsIr {
     let mut verified = true;
     let sections = secs
         .into_iter()

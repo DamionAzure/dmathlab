@@ -1,5 +1,14 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "./dark-palette.css";
+
+@font-face {
+  font-family: "Xylo Mirage Display";
+  src: url("./assets/fonts/xylo-mirage-display.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
 
 @custom-variant dark (&:is(.dark *));
 
@@ -112,6 +121,8 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+.font-brand { font-family: "Xylo Mirage Display", var(--font-geist-sans), sans-serif; font-weight: 400; letter-spacing: 0.01em; }
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -121,7 +132,7 @@
   }
 }
 
-/* ---- DMath Visualizer: custom scrollbars + code selection ---- */
+/* ---- Kaylei: custom scrollbars + code selection ---- */
 .dmath-scroll::-webkit-scrollbar,
 main ::-webkit-scrollbar,
 [data-slot="card-content"] ::-webkit-scrollbar {
@@ -165,3 +176,28 @@ body {
 button, [role="combobox"] { transition: background-color .15s, box-shadow .15s, border-color .15s, transform .05s; }
 button:active:not(:disabled) { transform: translateY(0.5px); }
 :focus-visible { outline: 2px solid rgb(16 185 129 / 0.55); outline-offset: 2px; }
+
+/* ── Dark theme touches (palette itself lives in dark-palette.css) ───────── */
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+.dark body {
+  background:
+    radial-gradient(1100px 420px at 50% -140px, rgb(16 185 129 / 0.10), transparent 70%),
+    #0c0c0e;
+  background-attachment: fixed;
+}
+.dark [data-slot="card"] {
+  border-color: rgb(255 255 255 / 0.09);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.4),
+    0 10px 28px -14px rgb(0 0 0 / 0.6);
+}
+.dark * { scrollbar-color: rgb(113 113 122 / 0.55) transparent; }
+.dark main ::-webkit-scrollbar-thumb { background: rgb(82 82 91); }
+.dark main ::-webkit-scrollbar-thumb:hover { background: rgb(113 113 122); }
+.dark ::selection { background: rgb(16 185 129 / 0.35); }
+
+/* ── Mobile: never let content widen the page ────────────────────────────── */
+html, body { max-width: 100%; overflow-x: clip; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+[data-slot="card"], [data-slot="card-content"] { min-width: 0; max-width: 100%; }
+[data-slot="card-content"] { overflow-x: auto; }

@@ -63,7 +63,7 @@ export function CodeEditor({ value, onChange, errorLines, onRun }: CodeEditorPro
   };
 
   return (
-    <div className="relative flex overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 font-mono shadow-[inset_0_1px_0_rgb(255_255_255/0.05)] text-[13px] leading-5">
+    <div className="keep-dark relative flex h-72 w-full min-w-0 max-w-full overflow-hidden rounded-xl sm:h-80 lg:h-96 border border-zinc-800 bg-zinc-950 font-mono shadow-[inset_0_1px_0_rgb(255_255_255/0.05)] text-[13px] leading-5">
       {/* Line-number gutter */}
       <div
         ref={gutterRef}
@@ -114,7 +114,7 @@ export function CodeEditor({ value, onChange, errorLines, onRun }: CodeEditorPro
           onKeyDown={handleKeyDown}
           spellCheck={false}
           aria-label="DMath program editor"
-          className="absolute inset-0 h-full w-full resize-none overflow-auto whitespace-pre bg-transparent px-3 py-3 text-transparent caret-emerald-300 outline-none selection:bg-emerald-400/30"
+          className="absolute inset-0 h-full w-full resize-none overflow-auto whitespace-pre [overflow-wrap:normal] [-webkit-text-size-adjust:100%] bg-transparent px-3 py-3 text-transparent caret-emerald-300 outline-none selection:bg-emerald-400/30"
         />
       </div>
     </div>

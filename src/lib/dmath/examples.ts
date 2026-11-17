@@ -352,6 +352,35 @@ DISPLAY COLOR(K)
 PATH4 = GRAPH {1,2,3,4} {(1,2), (2,3), (3,4)}
 DISPLAY COLOR(PATH4)`,
   },
+  {
+    id: "graphs-steps",
+    group: "Graph Theory",
+    name: "Graphs — step by step",
+    description: "Worked solutions: BFS, DFS, Dijkstra, Kruskal & Prim, coloring, bipartite",
+    code: `# VISUALIZE ... AS STEPS shows the algorithm round by round.
+G = GRAPH {1,2,3,4,5,6} {(1,2), (1,3), (2,4), (3,4), (4,5), (5,6)}
+P = BFS(G, 1)
+VISUALIZE P AS STEPS
+
+D = DFS(G, 1)
+VISUALIZE D AS STEPS
+
+W = GRAPH {1,2,3,4,5} {(1,2,7), (1,3,3), (3,2,2), (2,4,2), (3,4,8), (4,5,3)}
+S = SHORTEST_PATH(W, 1, 5)
+VISUALIZE S AS STEPS
+
+# Kruskal, cross-checked against Prim
+T = MST(W)
+VISUALIZE T AS STEPS
+
+C = COLOR(G)
+VISUALIZE C AS STEPS
+
+# A triangle is not bipartite: the steps show the odd cycle
+K = GRAPH {1,2,3} {(1,2), (2,3), (1,3)}
+B = IS_BIPARTITE(K)
+VISUALIZE B AS STEPS`,
+  },
 ];
 
 /** Display order of example groups in the editor's example picker. */

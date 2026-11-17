@@ -66,7 +66,7 @@ jobs:
           else
             id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
                    -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
-                   -f name="DMath Lab $TAG" -F draft=true -F generate_release_notes=true \
+                   -f name="Kaylei $TAG" -F draft=true -F generate_release_notes=true \
                    -q .id)
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
@@ -156,7 +156,7 @@ jobs:
             ALIAS=dmath; PASS=dmath-temp-key
             keytool -genkeypair -keystore "$RUNNER_TEMP/release.keystore" -alias "$ALIAS" \
               -storepass "$PASS" -keypass "$PASS" -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=DMath Lab"
+              -dname "CN=Kaylei"
           fi
           "$BT/zipalign" -p -f 4 "$APK" "$RUNNER_TEMP/aligned.apk"
           OUT="DMath-Lab_${VERSION}_android.apk"

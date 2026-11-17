@@ -3,7 +3,14 @@
 //!
 //! The UI owns the document text; Rust owns dialogs, disk access and menus.
 
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+};
 
 use serde::Serialize;
 use tauri::{
@@ -21,6 +28,10 @@ pub struct DocState {
     recents: Mutex<Vec<String>>,
     dirty: Mutex<bool>,
     name: Mutex<String>,
+    /// A file the OS asked us to open before the UI was listening.
+    pending_open: Mutex<Option<String>>,
+    /// Set once the UI has asked for its startup file (i.e. is listening).
+    ui_ready: AtomicBool,
 }
 
 impl DocState {
@@ -29,6 +40,8 @@ impl DocState {
             recents: Mutex::new(Vec::new()),
             dirty: Mutex::new(false),
             name: Mutex::new("Untitled".into()),
+            pending_open: Mutex::new(None),
+            ui_ready: AtomicBool::new(false),
         }
     }
 }
@@ -114,7 +127,7 @@ fn build_menu(app: &AppHandle, recents: &[String]) -> tauri::Result<Menu<tauri::
     }
     let recent_menu = recent_menu.build()?;
 
-    let quit = item("quit", "Quit DMath Lab", Some("CmdOrCtrl+Q"))?;
+    let quit = item("quit", "Quit Kaylei", Some("CmdOrCtrl+Q"))?;
 
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("new", "New", Some("CmdOrCtrl+N"))?)
@@ -149,18 +162,22 @@ fn build_menu(app: &AppHandle, recents: &[String]) -> tauri::Result<Menu<tauri::
         .maximize()
         .build()?;
 
-    let help = SubmenuBuilder::new(app, "Help").about(None).build()?;
+    let mut help = SubmenuBuilder::new(app, "Help").item(&item("reference", "Language Reference", Some("F1"))?);
+    if !cfg!(target_os = "macos") {
+        help = help.separator().about(None);
+    }
+    let help = help.build()?;
 
     let mut menu = MenuBuilder::new(app);
     if cfg!(target_os = "macos") {
         // macOS: the first submenu is the application menu.
-        let app_menu = SubmenuBuilder::new(app, "DMath Lab")
+        let app_menu = SubmenuBuilder::new(app, "Kaylei")
             .about(None)
             .separator()
             .hide()
             .hide_others()
             .separator()
-            .item(&item("quit", "Quit DMath Lab", Some("CmdOrCtrl+Q"))?)
+            .item(&item("quit", "Quit Kaylei", Some("CmdOrCtrl+Q"))?)
             .build()?;
         menu = menu.item(&app_menu);
     }
@@ -189,7 +206,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
                 let _ = w.close();
             }
         }
-        "new" | "open" | "save" | "save_as" | "run" | "clear_output" | "clear_editor" => {
+        "new" | "open" | "save" | "save_as" | "run" | "clear_output" | "clear_editor" | "reference" => {
             let _ = app.emit("menu", id);
         }
         _ => {}
@@ -210,7 +227,7 @@ fn refresh_title(app: &AppHandle, state: &DocState) {
     if let Some(w) = app.get_webview_window("main") {
         let name = state.name.lock().unwrap().clone();
         let dirty = *state.dirty.lock().unwrap();
-        let _ = w.set_title(&format!("{}{} — DMath Lab", if dirty { "• " } else { "" }, name));
+        let _ = w.set_title(&format!("{}{} — Kaylei", if dirty { "• " } else { "" }, name));
     }
 }
 
@@ -328,14 +345,95 @@ pub fn set_doc_state(app: AppHandle, state: State<'_, DocState>, name: Option<St
     refresh_title(&app, &state);
 }
 
-/// A `.dm` path passed on the command line (e.g. double-clicking a file).
+fn is_dm_arg(a: &str) -> bool {
+    !a.starts_with('-') && a.to_lowercase().ends_with(".dm")
+}
+
+/// The first `.dm` argument as an absolute path. Relative paths are resolved
+/// against `cwd` (the directory the second instance was launched from).
+pub fn dm_path_from_args(args: &[String], cwd: Option<&str>) -> Option<String> {
+    let arg = args.iter().skip(1).find(|a| is_dm_arg(a))?;
+    let p = PathBuf::from(arg);
+    let abs = if p.is_absolute() {
+        p
+    } else {
+        cwd.map(PathBuf::from).or_else(|| std::env::current_dir().ok())?.join(p)
+    };
+    Some(abs.to_string_lossy().into_owned())
+}
+
+/// A file the OS asked us to open while we were already running (a second
+/// launch on Windows/Linux, a Finder double-click or "Open With" on macOS).
+/// Goes straight to the UI if it is listening, otherwise waits for
+/// `startup_file`. Either way the window is brought to the front.
+pub fn open_external(app: &AppHandle, path: String) {
+    let state = app.state::<DocState>();
+    if state.ui_ready.load(Ordering::SeqCst) {
+        let _ = app.emit("menu-open-path", path);
+    } else {
+        *state.pending_open.lock().unwrap() = Some(path);
+    }
+    focus_main(app);
+}
+
+pub fn focus_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// The file the app was launched with: one handed over by the OS before the
+/// UI was ready, or a `.dm` path on the command line.
 #[tauri::command]
 pub async fn startup_file(app: AppHandle, state: State<'_, DocState>) -> Result<Option<OpenedFile>, String> {
-    let arg = std::env::args()
-        .skip(1)
-        .find(|a| !a.starts_with('-') && a.to_lowercase().ends_with(".dm"));
-    let Some(path) = arg else { return Ok(None) };
+    state.ui_ready.store(true, Ordering::SeqCst);
+    let pending = state.pending_open.lock().unwrap().take();
+    let args: Vec<String> = std::env::args().collect();
+    let Some(path) = pending.or_else(|| dm_path_from_args(&args, None)) else { return Ok(None) };
     let contents = read_checked(&path)?;
     add_recent(&app, &state, &path);
     Ok(Some(OpenedFile { path, contents }))
+}
+
+/// Save an exported picture / report. The UI hands over the bytes (base64) and
+/// a suggested file name; the user picks where it goes. Returns the saved path,
+/// or `None` if the dialog was cancelled.
+#[tauri::command]
+pub async fn export_file(
+    app: AppHandle,
+    suggested_name: String,
+    extension: String,
+    data_base64: String,
+) -> Result<Option<String>, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|e| format!("Bad export data: {e}"))?;
+    if bytes.len() > 64 * 1024 * 1024 {
+        return Err("That export is too large.".into());
+    }
+    let ext = extension.trim_start_matches('.').to_lowercase();
+    if !["png", "svg", "md", "csv", "txt"].contains(&ext.as_str()) {
+        return Err(format!("Unsupported export type .{ext}"));
+    }
+    // Keep only the file-name part of the suggestion.
+    let name = PathBuf::from(&suggested_name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("export.{ext}"));
+    let picked = app
+        .dialog()
+        .file()
+        .set_file_name(&name)
+        .add_filter(ext.to_uppercase(), &[ext.as_str()])
+        .blocking_save_file();
+    let Some(picked) = picked else { return Ok(None) };
+    let mut p = picked.into_path().map_err(|e| e.to_string())?;
+    if p.extension().is_none() {
+        p.set_extension(&ext);
+    }
+    fs::write(&p, bytes).map_err(|e| format!("Cannot save {}: {e}", file_name(&p.to_string_lossy())))?;
+    Ok(Some(p.to_string_lossy().into_owned()))
 }

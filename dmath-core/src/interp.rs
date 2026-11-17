@@ -69,6 +69,9 @@ pub struct Interpreter {
     /// arguments) behind each variable, so `VISUALIZE G AS STEPS` can show
     /// the worked solution.
     step_calls: HashMap<String, (Builtin, Vec<i64>)>,
+    /// Same for graph algorithms (BFS, MST, …): the call plus a snapshot of
+    /// the graph it ran on.
+    graph_step_calls: HashMap<String, (Builtin, GraphVal, Vec<i64>, String)>,
     /// The BFS / DFS / SHORTEST_PATH calls that produced each variable, so
     /// `DISPLAY P` can emit the highlighted traversal view.
     traversals: HashMap<String, Expr>,
@@ -88,6 +91,7 @@ impl Interpreter {
             pascal_rows: HashMap::new(),
             comb_cells: HashMap::new(),
             step_calls: HashMap::new(),
+            graph_step_calls: HashMap::new(),
             traversals: HashMap::new(),
             universe: None,
             intermediates: Vec::new(),
@@ -293,29 +297,49 @@ impl Interpreter {
 
     /// Remember which steppable call produced `name` (for `AS STEPS`).
     fn track_step_call(&mut self, name: &str, expr: &Expr) {
+        self.step_calls.remove(name);
+        self.graph_step_calls.remove(name);
         match expr {
             Expr::Call { func, args, .. } if crate::explain::supports(*func) => {
-                match self.eval_args_quietly(args) {
-                    Some(vals) => {
-                        self.step_calls.insert(name.to_string(), (*func, vals));
-                    }
-                    None => {
-                        self.step_calls.remove(name);
-                    }
+                if let Some(vals) = self.eval_args_quietly(args) {
+                    self.step_calls.insert(name.to_string(), (*func, vals));
                 }
             }
-            Expr::Var { name: src, .. } => match self.step_calls.get(src).cloned() {
-                Some(c) => {
+            Expr::Call { func, args, .. } if crate::explain_graph::supports(*func) => {
+                if let Some((g, vals)) = self.eval_graph_call_quietly(args) {
+                    self.graph_step_calls.insert(name.to_string(), (*func, g, vals, pretty(expr)));
+                }
+            }
+            Expr::Var { name: src, .. } => {
+                if let Some(c) = self.step_calls.get(src).cloned() {
                     self.step_calls.insert(name.to_string(), c);
                 }
-                None => {
-                    self.step_calls.remove(name);
+                if let Some(c) = self.graph_step_calls.get(src).cloned() {
+                    self.graph_step_calls.insert(name.to_string(), c);
                 }
-            },
-            _ => {
-                self.step_calls.remove(name);
+            }
+            _ => {}
+        }
+    }
+
+    /// Evaluate `(graph, vertex, …)` arguments without leaving trace entries.
+    fn eval_graph_call_quietly(&mut self, args: &[Expr]) -> Option<(GraphVal, Vec<i64>)> {
+        let mark = self.intermediates.len();
+        let mut graph = None;
+        let mut nums = Vec::new();
+        let mut ok = true;
+        for (i, a) in args.iter().enumerate() {
+            match self.eval(a, None) {
+                Ok(Value::Graph(g)) if i == 0 => graph = Some(g),
+                Ok(Value::Number(n)) if i > 0 => nums.push(n),
+                _ => {
+                    ok = false;
+                    break;
+                }
             }
         }
+        self.intermediates.truncate(mark);
+        if ok { graph.map(|g| (g, nums)) } else { None }
     }
 
     /// Evaluate integer arguments without leaving trace entries behind.
@@ -344,6 +368,46 @@ impl Interpreter {
     /// number-theory / combinatorics call behind `G` (direct or via a variable).
     fn exec_steps(&mut self, expr: &Expr) -> IResult<StmtOutcome> {
         let pos = expr.pos();
+        // Graph algorithms (BFS, DFS, SHORTEST_PATH, MST, COLOR, …).
+        let graph_call: Option<(Builtin, GraphVal, Vec<i64>, String)> = match expr {
+            Expr::Call { func, args, .. } if crate::explain_graph::supports(*func) => {
+                match self.eval_graph_call_quietly(args) {
+                    Some((g, vals)) => {
+                        let text = pretty(expr);
+                        Some((*func, g, vals, text))
+                    }
+                    None => {
+                        return Err(Diagnostic::error(
+                            pos.0,
+                            pos.1,
+                            format!("'{}' needs a graph first, then whole-number vertices.", func.name()),
+                        ))
+                    }
+                }
+            }
+            Expr::Var { name, .. } if self.graph_step_calls.contains_key(name) => {
+                Some(self.graph_step_calls[name].clone())
+            }
+            _ => None,
+        };
+        if let Some((func, g, vals, text)) = graph_call {
+            let ir = crate::explain_graph::explain_graph(func, &g, &vals, text)
+                .map_err(|m| Diagnostic::error(pos.0, pos.1, m))?;
+            let summary = format!(
+                "Worked solution for {} ({} method{}{})",
+                ir.expression,
+                ir.sections.iter().filter(|s| s.agrees.is_some()).count(),
+                if ir.sections.iter().filter(|s| s.agrees.is_some()).count() == 1 { "" } else { "s" },
+                if ir.verified { ", verified" } else { ", DISAGREEMENT — please report" }
+            );
+            return Ok(StmtOutcome {
+                outputs: Vec::new(),
+                visualizations: vec![VizIr::Steps(ir)],
+                warnings: Vec::new(),
+                summary,
+                intermediates: std::mem::take(&mut self.intermediates),
+            });
+        }
         let (func, args) = match expr {
             Expr::Call { func, args, .. } if crate::explain::supports(*func) => {
                 let mark = self.intermediates.len();
@@ -363,7 +427,7 @@ impl Interpreter {
                     pos.0,
                     pos.1,
                     format!(
-                        "'STEPS' needs the result of IS_PRIME, FACTORS, DIVISORS, GCD, LCM, TOTIENT, SIEVE, FACT, PERM or COMB, but '{}' is not one.",
+                        "'STEPS' needs the result of IS_PRIME, FACTORS, DIVISORS, GCD, LCM, TOTIENT, SIEVE, FACT, PERM, COMB, BFS, DFS, SHORTEST_PATH, MST, COLOR, IS_BIPARTITE or IS_CONNECTED, but '{}' is not one.",
                         pretty(expr)
                     ),
                 )
@@ -2380,3 +2444,4 @@ pub fn stmt_kind(stmt: &Stmt) -> &'static str {
 
 #[allow(dead_code)]
 fn _unused(_: &DType, _: &Pos, _: &VizKind) {}
+

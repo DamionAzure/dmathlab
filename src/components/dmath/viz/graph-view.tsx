@@ -347,7 +347,7 @@ export function GraphView({ ir }: { ir: GraphViewIr }) {
                 width={b.w}
                 height={15}
                 rx={7.5}
-                fill="#fef3c7"
+                className="fill-amber-100"
                 stroke={PATH_COLOR}
                 strokeWidth={1}
               />
@@ -366,7 +366,7 @@ export function GraphView({ ir }: { ir: GraphViewIr }) {
           {/* visited-order badges */}
           {visitBadges.map((b) => (
             <g key={`visit-${b.v}`}>
-              <circle cx={b.x} cy={b.y} r={7.5} fill="#ede9fe" stroke={VISIT_COLOR} strokeWidth={1} />
+              <circle className="fill-violet-100" cx={b.x} cy={b.y} r={7.5} stroke={VISIT_COLOR} strokeWidth={1} />
               <text
                 x={b.x}
                 y={b.y}

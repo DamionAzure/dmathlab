@@ -1,22 +1,30 @@
 "use client";
 
-// Main DMath Visualizer application shell.
+import kayleiIcon from "@/assets/kaylei-icon.svg";
+
+// Main Kaylei application shell.
 // Left: DSL editor + controls + output panel. Right: visualizations + trace.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
+  BookOpen,
   Braces,
   Eraser,
   FlaskConical,
   Loader2,
+  Monitor,
+  Moon,
   Play,
   Radar,
-  Sigma,
   Sparkles,
+  Sun,
   Trash2,
 } from "lucide-react";
 
+import { useTheme } from "@/lib/dmath/theme";
+import { ReferenceDialog } from "@/components/dmath/reference-dialog";
+import { ExportableCard } from "@/components/dmath/export-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,7 +67,9 @@ import { DEFAULT_EXAMPLE, EXAMPLES, EXAMPLE_GROUPS } from "@/lib/dmath/examples"
 import { isPropertyCheckIr, type DMathEnvelope, type VizIr } from "@/lib/dmath/types";
 
 export function DMathApp() {
+  const { choice: theme, cycle: cycleTheme } = useTheme();
   const [source, setSource] = useState(DEFAULT_EXAMPLE.code);
+  const [refOpen, setRefOpen] = useState(false);
   const [exampleId, setExampleId] = useState<string>(DEFAULT_EXAMPLE.id);
   const [envelope, setEnvelope] = useState<DMathEnvelope | null>(null);
   const [engine, setEngine] = useState<DMathEngine | null>(null);
@@ -197,7 +207,7 @@ export function DMathApp() {
     setNotice(null);
   };
 
-  // Keep the native window title ("• name — DMath Lab") in sync.
+  // Keep the native window title ("• name — Kaylei") in sync.
   useEffect(() => {
     setDocState(fileName(filePath), dirty).catch(() => {});
   }, [filePath, dirty]);
@@ -217,6 +227,7 @@ export function DMathApp() {
       else if (a === "run") void run();
       else if (a === "clear_output") setEnvelope(null);
       else if (a === "clear_editor") setSource("");
+      else if (a === "reference") setRefOpen(true);
     },
     open: (p) => void openPath(p),
   };
@@ -240,44 +251,34 @@ export function DMathApp() {
   }, []);
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-100 text-zinc-900">
+    <div className="flex min-h-screen w-full max-w-full flex-col overflow-x-clip bg-zinc-100 text-zinc-900">
       {/* Header */}
       <header className="sticky top-0 z-30 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1680px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-zinc-800 to-zinc-950 shadow-sm ring-1 ring-black/5">
-              <Sigma className="h-5 w-5 text-emerald-400" />
-            </span>
+            <img src={kayleiIcon} alt="" className="h-9 w-9 shrink-0" />
             <div>
-              <h1 className="text-base font-bold leading-tight">DMath Visualizer</h1>
-              <p className="text-xs text-zinc-500">
-                Interactive Discrete Mathematics Workbench
-              </p>
+              <h1 className="font-brand text-2xl leading-none text-[#1C9A93]">Kaylei</h1>
             </div>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="border-zinc-300 font-mono text-[11px] text-zinc-600">
-              Native Rust core
-            </Badge>
-            <Badge variant="outline" className="border-zinc-300 font-mono text-[11px] text-zinc-600">
-              dmath.viz.v1
-            </Badge>
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-                engineError
-                  ? "border-rose-300 bg-rose-50 text-rose-700"
-                  : engine
-                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                    : "border-amber-300 bg-amber-50 text-amber-700"
-              }`}
+            <button
+              type="button"
+              onClick={() => setRefOpen(true)}
+              title="Language reference (F1)"
+              className="inline-flex h-7 items-center gap-1 rounded-full border border-zinc-300 px-2.5 text-[11px] font-medium text-zinc-600 hover:bg-zinc-100"
             >
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  engineError ? "bg-rose-500" : engine ? "bg-emerald-500" : "animate-pulse bg-amber-500"
-                }`}
-              />
-              {engineError ? "core failed" : engine ? "core ready" : "loading core…"}
-            </span>
+              <BookOpen className="h-3.5 w-3.5" /> Reference
+            </button>
+            <button
+              type="button"
+              onClick={cycleTheme}
+              title={`Theme: ${theme} (click to change)`}
+              aria-label={`Theme: ${theme}. Click to change.`}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-zinc-300 text-zinc-600 hover:bg-zinc-100"
+            >
+              {theme === "dark" ? <Moon className="h-3.5 w-3.5" /> : theme === "light" ? <Sun className="h-3.5 w-3.5" /> : <Monitor className="h-3.5 w-3.5" />}
+            </button>
           </div>
         </div>
       </header>
@@ -305,9 +306,9 @@ export function DMathApp() {
           </div>
         )}
 
-        <div className="grid gap-5 lg:grid-cols-[minmax(400px,44%)_1fr]">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(400px,44%)_minmax(0,1fr)]">
           {/* Left column: editor + output */}
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5">
             <Card className="border-zinc-200 shadow-sm">
               <CardHeader className="flex flex-row flex-wrap items-center gap-2 space-y-0 pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm font-bold">
@@ -323,7 +324,7 @@ export function DMathApp() {
                 <div className="ml-auto flex flex-wrap items-center gap-2">
                   <Select value={exampleId} onValueChange={loadExample}>
                     <SelectTrigger
-                      className="h-8 w-[220px] text-xs"
+                      className="h-8 w-[220px] max-w-full text-xs"
                       aria-label="Load an example program"
                     >
                       <SelectValue placeholder="Examples…" />
@@ -384,9 +385,6 @@ export function DMathApp() {
                     <Trash2 className="mr-1.5 h-4 w-4" />
                     Clear output
                   </Button>
-                  <span className="ml-auto font-mono text-[11px] text-zinc-400">
-                    {source.split("\n").length} lines · {source.length} chars
-                  </span>
                 </div>
               </CardContent>
             </Card>
@@ -417,18 +415,13 @@ export function DMathApp() {
           </div>
 
           {/* Right column: visualizations + trace */}
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5">
             <Card className="border-zinc-200 shadow-sm">
               <CardHeader className="flex flex-row items-center gap-2 space-y-0 pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm font-bold">
                   <IconTile icon={Sparkles} />
                   Visualization
                 </CardTitle>
-                {envelope && vizViews.length > 0 && (
-                  <Badge variant="outline" className="ml-auto font-mono text-[11px] text-zinc-500">
-                    {vizViews.length} view{vizViews.length === 1 ? "" : "s"}
-                  </Badge>
-                )}
               </CardHeader>
               <CardContent>
                 {vizViews.length > 0 ? (
@@ -461,21 +454,8 @@ export function DMathApp() {
           </div>
         </div>
       </main>
+      <ReferenceDialog open={refOpen} onClose={() => setRefOpen(false)} onTry={(code) => setSource(code)} />
 
-      {/* Footer */}
-      <footer className="mt-auto border-t border-zinc-200 bg-white">
-        <div className="mx-auto flex max-w-[1680px] flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-xs text-zinc-500 sm:px-6">
-          <span className="font-medium text-zinc-700">DMath Visualizer</span>
-          <span className="hidden sm:inline">·</span>
-          <span className="italic">
-            Discrete Mathematics is not merely used by the application; it is what the application is
-            designed to operate on.
-          </span>
-          <span className="ml-auto font-mono">
-            core: Rust 1.99 · shell: Tauri 2 + React 19 · {envelope ? `contract ${envelope.contract}` : "dmath.viz.v1"}
-          </span>
-        </div>
-      </footer>
     </div>
   );
 }
@@ -490,7 +470,7 @@ function IconTile({ icon: Icon }: { icon: LucideIcon }) {
 
 function VizCard({ viz }: { viz: VizIr }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-zinc-50/40 p-3">
+    <ExportableCard viz={viz}>
       {viz.type === "truth_table" && <TruthTableView ir={viz} />}
       {viz.type === "venn" && <VennView ir={viz} />}
       {viz.type === "equivalence_check" && <EquivalenceView ir={viz} />}
@@ -501,6 +481,6 @@ function VizCard({ viz }: { viz: VizIr }) {
       {viz.type === "sieve_grid" && <SieveView ir={viz} />}
       {viz.type === "pascal" && <PascalView ir={viz} />}
       {viz.type === "steps" && <StepsView ir={viz} />}
-    </div>
+    </ExportableCard>
   );
 }

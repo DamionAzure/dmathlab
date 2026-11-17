@@ -13,6 +13,11 @@ export interface DMathEngine {
   run(source: string): Promise<DMathEnvelope>;
 }
 
+/** True when running inside the Tauri shell. */
+export function inTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
 let enginePromise: Promise<DMathEngine> | null = null;
 
 export function loadEngine(): Promise<DMathEngine> {
@@ -26,9 +31,9 @@ export function loadEngine(): Promise<DMathEngine> {
 }
 
 async function connect(): Promise<DMathEngine> {
-  if (!("__TAURI_INTERNALS__" in window)) {
+  if (!inTauri()) {
     throw new Error(
-      "Not running inside the DMath Lab desktop app. Start it with `npm run tauri dev`.",
+      "Not running inside the Kaylei desktop app. Start it with `npm run tauri dev`.",
     );
   }
   const version = await invoke<string>("core_version");

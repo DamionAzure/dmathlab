@@ -9,7 +9,7 @@ export interface OpenedFile {
   contents: string;
 }
 
-export type MenuAction = "new" | "open" | "save" | "save_as" | "run" | "clear_output" | "clear_editor";
+export type MenuAction = "new" | "open" | "save" | "save_as" | "run" | "clear_output" | "clear_editor" | "reference";
 
 export const openFileDialog = () => invoke<OpenedFile | null>("open_dialog");
 export const readFile = (path: string) => invoke<OpenedFile>("read_file", { path });

@@ -29,6 +29,14 @@ pub fn run() {
     // Desktop: remembered window size/position, native menu, file dialogs.
     #[cfg(desktop)]
     let builder = builder
+        // Must be the first plugin: a second launch (e.g. double-clicking another
+        // .dm file) hands its arguments to this running instance and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            match desktop::dm_path_from_args(&argv, Some(&cwd)) {
+                Some(path) => desktop::open_external(app, path),
+                None => desktop::focus_main(app),
+            }
+        }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(desktop::DocState::new())
@@ -47,6 +55,7 @@ pub fn run() {
             desktop::confirm_discard,
             desktop::set_doc_state,
             desktop::startup_file,
+            desktop::export_file,
         ]);
 
     // Mobile: engine only (no menu bar / file dialogs).
@@ -54,6 +63,22 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![core_version, run_dsl]);
 
     builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // macOS delivers "open with" / double-clicks as an event, not as
+            // command-line arguments.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                for url in urls {
+                    if let Ok(path) = url.to_file_path() {
+                        let path = path.to_string_lossy().into_owned();
+                        if path.to_lowercase().ends_with(".dm") {
+                            desktop::open_external(app, path);
+                        }
+                    }
+                }
+            }
+            let _ = (app, event);
+        });
 }

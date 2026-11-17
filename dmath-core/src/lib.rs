@@ -8,6 +8,7 @@
 pub mod algo;
 pub mod ast;
 pub mod explain;
+pub mod explain_graph;
 pub mod interp;
 pub mod ir;
 pub mod lexer;
