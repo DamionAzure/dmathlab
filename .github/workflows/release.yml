@@ -115,7 +115,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "17" }
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - name: Install NDK + build-tools
         run: sdkmanager "platforms;android-34" "build-tools;${BUILD_TOOLS}" "ndk;${NDK_VERSION}"
       - uses: dtolnay/rust-toolchain@stable
