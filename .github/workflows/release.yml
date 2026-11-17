@@ -129,7 +129,7 @@ jobs:
       - name: Build release APK (arm64 + armv7)
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
-          npx tauri android build --apk --target aarch64 armv7 --ci
+          npx tauri android build --apk --target aarch64 --target armv7 --ci
       - name: Align and sign
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
