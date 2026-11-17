@@ -93,7 +93,7 @@ export function ReferenceDialog({ open, onClose, onTry }: Props) {
           {sections.length === 0 && <p className="py-8 text-center text-sm text-zinc-500">Nothing matches “{query}”.</p>}
           {sections.map((s) => (
             <section key={s.id}>
-              <h3 className="text-sm font-semibold text-zinc-900">{s.title}</h3>
+              <h3 className="font-heading text-zinc-900">{s.title}</h3>
               {s.blurb && !q && <p className="mt-1 text-xs leading-relaxed text-zinc-600">{s.blurb}</p>}
               <div className="mt-2 space-y-2">
                 {s.entries.map((e) => (

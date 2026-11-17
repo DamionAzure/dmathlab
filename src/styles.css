@@ -10,6 +10,17 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Para";
+  src: url("./assets/fonts/para.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Parafigure";
+  src: url("./assets/fonts/parafigure.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -201,3 +212,24 @@ button:active:not(:disabled) { transform: translateY(0.5px); }
 html, body { max-width: 100%; overflow-x: clip; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 [data-slot="card"], [data-slot="card-content"] { min-width: 0; max-width: 100%; }
 [data-slot="card-content"] { overflow-x: auto; }
+
+/* ── Kaylei type system ──────────────────────────────────────────────────────
+   Xylo Mirage Display → wordmark only        (.font-brand)
+   Parafigure          → card + dialog titles (rounded, heavier, reads at 14–18px)
+   Para                → controls & labels    (buttons, selects, badges)
+   Inter / JetBrains   → body text and code (unchanged; they carry the math glyphs)
+   The display faces are single-weight: stop browsers from faux-bolding them. */
+[data-slot="card-title"], .font-heading {
+  font-family: "Parafigure", var(--font-geist-sans), sans-serif;
+  font-weight: 400;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+  font-synthesis: none;
+}
+button, [role="combobox"], [data-slot="badge"], [data-slot="select-item"], [data-slot="select-label"] {
+  font-family: "Para", var(--font-geist-sans), sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  font-synthesis: none;
+}
+.font-brand { font-synthesis: none; }

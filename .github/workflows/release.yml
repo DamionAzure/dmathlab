@@ -2,7 +2,7 @@
 # Android APK, attach everything to a draft GitHub Release, then publish it
 # only if every build succeeded.
 #
-# Trigger it by pushing a tag (git tag v0.1.0 && git push --tags) or from the
+# Trigger it by pushing a tag (git tag v0.2.0 && git push --tags) or from the
 # Actions tab ("Run workflow"). The version comes from src-tauri/tauri.conf.json.
 name: Release
 
