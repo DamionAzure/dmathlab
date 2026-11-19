@@ -253,12 +253,28 @@ impl Parser {
     }
 
     fn parse_or(&mut self) -> PResult<Expr> {
+        let mut lhs = self.parse_xor()?;
+        while self.at(TokKind::Or) || self.at(TokKind::Nor) {
+            let op_tok = self.advance();
+            let op = if op_tok.kind == TokKind::Or { BinOp::Or } else { BinOp::Nor };
+            let rhs = self.parse_xor()?;
+            lhs = Expr::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                pos: op_tok.pos(),
+            };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_xor(&mut self) -> PResult<Expr> {
         let mut lhs = self.parse_and()?;
-        while self.at(TokKind::Or) {
+        while self.at(TokKind::Xor) {
             let op_tok = self.advance();
             let rhs = self.parse_and()?;
             lhs = Expr::Binary {
-                op: BinOp::Or,
+                op: BinOp::Xor,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
                 pos: op_tok.pos(),
@@ -269,11 +285,12 @@ impl Parser {
 
     fn parse_and(&mut self) -> PResult<Expr> {
         let mut lhs = self.parse_unary()?;
-        while self.at(TokKind::And) {
+        while self.at(TokKind::And) || self.at(TokKind::Nand) {
             let op_tok = self.advance();
+            let op = if op_tok.kind == TokKind::And { BinOp::And } else { BinOp::Nand };
             let rhs = self.parse_unary()?;
             lhs = Expr::Binary {
-                op: BinOp::And,
+                op,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
                 pos: op_tok.pos(),
@@ -309,10 +326,13 @@ impl Parser {
 
     fn parse_set_union(&mut self) -> PResult<Expr> {
         let mut lhs = self.parse_set_intersect()?;
-        while self.at(TokKind::Union) || self.at(TokKind::Difference) {
+        while self.at(TokKind::Union) || self.at(TokKind::Difference) || self.at(TokKind::SymDiff) {
             let op_tok = self.advance();
-            let op =
-                if op_tok.kind == TokKind::Union { BinOp::Union } else { BinOp::Difference };
+            let op = match op_tok.kind {
+                TokKind::Union => BinOp::Union,
+                TokKind::SymDiff => BinOp::SymDiff,
+                _ => BinOp::Difference,
+            };
             let rhs = self.parse_set_intersect()?;
             lhs = Expr::Binary {
                 op,
@@ -439,12 +459,7 @@ impl Parser {
                     return Ok(Expr::SetLit { items, pos: t.pos() });
                 }
                 loop {
-                    let item = if self.at(TokKind::LParen) {
-                        self.parse_tuple_item()?
-                    } else {
-                        let (v, pos) = self.parse_signed_number("the set literal")?;
-                        SetItem::Num { v, pos }
-                    };
+                    let item = self.parse_set_item()?;
                     let key = set_item_key(&item);
                     if seen.insert(key.clone()) {
                         items.push(item);
@@ -512,6 +527,45 @@ impl Parser {
             v
         };
         Ok((v, n.pos()))
+    }
+
+    /// One element of a set literal: a number, a tuple `(1, 2)` or a nested set `{1, 2}`.
+    fn parse_set_item(&mut self) -> PResult<SetItem> {
+        if self.at(TokKind::LParen) {
+            return self.parse_tuple_item();
+        }
+        if self.at(TokKind::LBrace) {
+            let lb = self.advance();
+            self.depth += 1;
+            if self.depth > MAX_EXPR_DEPTH {
+                return Err(Diagnostic::error(
+                    lb.line,
+                    lb.col,
+                    format!("Sets are nested too deeply (limit is {} levels).", MAX_EXPR_DEPTH),
+                ));
+            }
+            let mut items: Vec<SetItem> = Vec::new();
+            self.skip_newlines();
+            if self.at(TokKind::RBrace) {
+                self.advance();
+                self.depth -= 1;
+                return Ok(SetItem::Set { items, pos: lb.pos() });
+            }
+            loop {
+                items.push(self.parse_set_item()?);
+                if self.at(TokKind::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                break;
+            }
+            self.expect(TokKind::RBrace, "'}' to close the nested set")?;
+            self.depth -= 1;
+            return Ok(SetItem::Set { items, pos: lb.pos() });
+        }
+        let (v, pos) = self.parse_signed_number("the set literal")?;
+        Ok(SetItem::Num { v, pos })
     }
 
     /// Parse one tuple item inside a set literal: `( a, b {, c } )` with two
@@ -617,6 +671,13 @@ fn set_item_key(item: &SetItem) -> String {
         SetItem::Tuple { items, .. } => {
             let inner: Vec<String> = items.iter().map(|i| i.to_string()).collect();
             format!("({})", inner.join(", "))
+        }
+        SetItem::Set { items, .. } => {
+            // Order inside a nested set does not matter: {1, 2} is {2, 1}.
+            let mut inner: Vec<String> = items.iter().map(set_item_key).collect();
+            inner.sort();
+            inner.dedup();
+            format!("{{{}}}", inner.join(", "))
         }
     }
 }

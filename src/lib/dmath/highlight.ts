@@ -7,8 +7,8 @@ export interface Token {
   cls: string;
 }
 
-const LOGIC_OPS = new Set(["AND", "OR", "NOT", "IMPLIES", "IFF"]);
-const SET_OPS = new Set(["UNION", "INTERSECT", "DIFFERENCE", "COMPLEMENT", "CROSS", "SUBSET", "EQUALS"]);
+const LOGIC_OPS = new Set(["AND", "OR", "NOT", "XOR", "NAND", "NOR", "IMPLIES", "IFF"]);
+const SET_OPS = new Set(["UNION", "INTERSECT", "SYMDIFF", "DIFFERENCE", "COMPLEMENT", "CROSS", "SUBSET", "EQUALS"]);
 const STMT_KW = new Set([
   "DISPLAY",
   "VISUALIZE",
@@ -62,6 +62,25 @@ const BUILTIN_FN = new Set([
   "PERM",
   "COMB",
   "PASCAL",
+  // Modular arithmetic, more counting, more graphs
+  "MOD",
+  "MODPOW",
+  "MODINV",
+  "EGCD",
+  "CRT",
+  "FIB",
+  "CATALAN",
+  "DERANGE",
+  "STIRLING2",
+  "TOPO_SORT",
+  "IS_DAG",
+  "COMPONENTS",
+  "IS_EULERIAN",
+  "DEGREE_SEQUENCE",
+  "SIZE",
+  "POWERSET",
+  "CONTAINS",
+  "IS_DISJOINT",
 ]);
 const LITERALS = new Set(["TRUE", "FALSE"]);
 

@@ -7,10 +7,48 @@ use serde_json::json;
 /// An element of a set: either a number or an ordered tuple produced by a
 /// Cartesian product or a set literal. Ordering is total, so sets can live in
 /// a `BTreeSet`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SetElem {
     Num(i64),
     Tuple(Vec<SetElem>),
+    /// A set used as an element (for example a member of a power set). The
+    /// elements are kept sorted and unique so equal sets compare equal.
+    Set(Vec<SetElem>),
+}
+
+impl SetElem {
+    fn rank(&self) -> u8 {
+        match self {
+            SetElem::Num(_) => 0,
+            SetElem::Tuple(_) => 1,
+            SetElem::Set(_) => 2,
+        }
+    }
+}
+
+impl PartialOrd for SetElem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Numbers by value, tuples lexicographically, and nested sets by size first
+/// and then lexicographically, so a power set reads {}, {1}, {2}, {1, 2}, ...
+impl Ord for SetElem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (SetElem::Num(a), SetElem::Num(b)) => a.cmp(b),
+            (SetElem::Tuple(a), SetElem::Tuple(b)) => a.cmp(b),
+            (SetElem::Set(a), SetElem::Set(b)) => {
+                a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+            }
+            _ => match self.rank().cmp(&other.rank()) {
+                Ordering::Equal => Ordering::Equal,
+                o => o,
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for SetElem {
@@ -20,6 +58,10 @@ impl std::fmt::Display for SetElem {
             SetElem::Tuple(items) => {
                 let inner: Vec<String> = items.iter().map(|e| e.to_string()).collect();
                 write!(f, "({})", inner.join(", "))
+            }
+            SetElem::Set(items) => {
+                let inner: Vec<String> = items.iter().map(|e| e.to_string()).collect();
+                write!(f, "{{{}}}", inner.join(", "))
             }
         }
     }
@@ -34,6 +76,9 @@ impl SetElem {
             SetElem::Tuple(items) => {
                 serde_json::Value::Array(items.iter().map(|e| e.to_json()).collect())
             }
+            // Nested sets travel as their text, e.g. "{1, 2}", so the interface
+            // never mistakes them for tuples (which are JSON arrays).
+            SetElem::Set(_) => json!(self.to_string()),
         }
     }
 

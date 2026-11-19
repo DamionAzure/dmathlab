@@ -5,8 +5,8 @@
 
 use crate::ast::{BinOp, Expr, GraphEdgeLit, SetItem, UnOp};
 
-const ATOM_PREC: u8 = 9;
-const UNARY_PREC: u8 = 8; // NOT / COMPLEMENT bind tighter than any binary operator
+const ATOM_PREC: u8 = 12;
+const UNARY_PREC: u8 = 11; // NOT / COMPLEMENT bind tighter than any binary operator
 
 pub fn pretty(e: &Expr) -> String {
     go(e, 0)
@@ -86,6 +86,10 @@ fn set_item_to_string(item: &SetItem) -> String {
         SetItem::Tuple { items, .. } => {
             let inner: Vec<String> = items.iter().map(|i| i.to_string()).collect();
             format!("({})", inner.join(", "))
+        }
+        SetItem::Set { items, .. } => {
+            let inner: Vec<String> = items.iter().map(set_item_to_string).collect();
+            format!("{{{}}}", inner.join(", "))
         }
     }
 }

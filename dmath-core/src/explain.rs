@@ -1108,6 +1108,9 @@ pub fn supports(func: Builtin) -> bool {
             | Builtin::Fact
             | Builtin::Perm
             | Builtin::Comb
+            | Builtin::Egcd
+            | Builtin::ModInv
+            | Builtin::ModPow
     )
 }
 
@@ -1194,7 +1197,186 @@ pub fn explain(func: Builtin, args: &[i64], expression: String) -> Result<StepsI
                 comb_secs(n, k)
             }
         }
+        Builtin::Egcd => {
+            need(2)?;
+            egcd_secs(args[0], args[1])
+        }
+        Builtin::ModInv => {
+            need(2)?;
+            if args[1] < 2 {
+                return Err(format!("MODINV needs a modulus of at least 2, got {}.", args[1]));
+            }
+            match algo::modinv(args[0], args[1]) {
+                Some(x) => modinv_secs(args[0], args[1], x),
+                None => {
+                    return Err(format!(
+                        "{} has no inverse modulo {}: GCD({}, {}) = {}, not 1.",
+                        args[0], args[1], args[0], args[1], algo::gcd(args[0], args[1])
+                    ))
+                }
+            }
+        }
+        Builtin::ModPow => {
+            need(3)?;
+            if args[1] < 0 || args[2] < 1 {
+                return Err("MODPOW needs an exponent of at least 0 and a modulus of at least 1.".into());
+            }
+            modpow_secs(args[0], args[1] as u64, args[2])
+        }
         _ => return Err(format!("STEPS has no worked solution for {}.", func.name())),
     };
     Ok(finish(func.name(), expression, title, engine, secs))
+}
+
+
+// ───────────────────────── EGCD / MODINV / MODPOW ─────────────────────────
+
+fn egcd_secs(a: i64, b: i64) -> (String, Val, Vec<Sec>) {
+    let (g, x, y) = algo::egcd(a, b);
+    let title = format!("Extended Euclid on {} and {}", a, b);
+    let mut secs = Vec::new();
+
+    let mut s = Sec::new("method", "Euclid's algorithm, tracking x and y")
+        .intro("Each row is a remainder r that we write as a·x + b·y. Row k+1 comes from subtracting q × (row k) from row k−1, where q is the whole-number quotient.");
+    let (mut r0, mut r1) = (a as i128, b as i128);
+    let (mut x0, mut x1) = (1i128, 0i128);
+    let (mut y0, mut y1) = (0i128, 1i128);
+    let mut rows = vec![
+        vec!["0".into(), "–".into(), r0.to_string(), x0.to_string(), y0.to_string()],
+        vec!["1".into(), "–".into(), r1.to_string(), x1.to_string(), y1.to_string()],
+    ];
+    let mut k = 1;
+    while r1 != 0 {
+        let q = r0 / r1;
+        (r0, r1) = (r1, r0 - q * r1);
+        (x0, x1) = (x1, x0 - q * x1);
+        (y0, y1) = (y1, y0 - q * y1);
+        k += 1;
+        rows.push(vec![k.to_string(), q.to_string(), r1.to_string(), x1.to_string(), y1.to_string()]);
+    }
+    s.table(&["row", "q", "r", "x", "y"], rows);
+    s.line(format!("The last non-zero remainder is {}, with x = {} and y = {}.", r0, x0, y0));
+    if r0 < 0 {
+        s.line("It came out negative, so flip all three signs to keep the GCD positive.");
+    }
+    s.conclude(format!("[g, x, y] = [{}, {}, {}]", g, x, y), Val::List(vec![g, x, y]));
+    secs.push(s);
+
+    let mut c = Sec::new("check", "Check the Bézout identity")
+        .intro("The answer is right if a·x + b·y really equals g.");
+    let lhs = a as i128 * x as i128 + b as i128 * y as i128;
+    c.line(format!("{}·({}) + {}·({}) = {}", a, x, b, y, lhs));
+    if lhs == g as i128 {
+        c.good(format!("That equals the GCD, {}.", g));
+    } else {
+        c.bad(format!("That is not {}, so something is wrong.", g));
+    }
+    c.line(format!("Check against plain GCD: GCD({}, {}) = {}.", a, b, algo::gcd(a, b)));
+    secs.push(c);
+
+    let mut n = Sec::new("note", "Why this matters");
+    n.line("If g = 1, then x is the inverse of a modulo b (use MODINV), and the same table solves equations like a·x ≡ c (mod b).");
+    secs.push(n);
+    (title, Val::List(vec![g, x, y]), secs)
+}
+
+fn modinv_secs(a: i64, m: i64, inv: i64) -> (String, Val, Vec<Sec>) {
+    let title = format!("Inverse of {} modulo {}", a, m);
+    let mut secs = Vec::new();
+    let r = algo::modulo(a, m);
+    if r != a {
+        let mut n = Sec::new("note", "Reduce first");
+        n.line(format!("{} ≡ {} (mod {}), so we look for the inverse of {}.", a, r, m, r));
+        secs.push(n);
+    }
+
+    // 1. extended Euclid
+    let (g, x, y) = algo::egcd(r, m);
+    let mut s = Sec::new("method", "Extended Euclid")
+        .intro(format!("Find x and y with {}·x + {}·y = 1. Then {}·x ≡ 1 (mod {}), because the {}·y part is a multiple of {}.", r, m, r, m, m, m));
+    s.line(format!("Extended Euclid gives GCD = {}, x = {}, y = {}.", g, x, y));
+    s.line(format!("Check: {}·({}) + {}·({}) = {}", r, x, m, y, r as i128 * x as i128 + m as i128 * y as i128));
+    s.line(format!("x = {} is negative or too big, so reduce it mod {}: x mod {} = {}.", x, m, m, algo::modulo(x, m)));
+    s.conclude(format!("inverse = {}", inv), Val::Num(algo::modulo(x, m)));
+    secs.push(s);
+
+    // 2. brute force
+    if m <= 100_000 {
+        let mut b = Sec::new("method", "Try every candidate")
+            .intro(format!("Multiply {} by 1, 2, 3, … and stop at the first product that leaves remainder 1.", r));
+        let mut found = None;
+        let mut rows = Vec::new();
+        for k in 1..m {
+            let prod = (r as i128 * k as i128) % m as i128;
+            if rows.len() < 30 {
+                rows.push(vec![k.to_string(), format!("{} × {}", r, k), prod.to_string()]);
+            }
+            if prod == 1 {
+                found = Some(k);
+                break;
+            }
+        }
+        b.table(&["k", "product", &format!("mod {}", m)], rows);
+        if let Some(k) = found {
+            b.good(format!("{}·{} leaves remainder 1.", r, k));
+            b.conclude(format!("inverse = {}", k), Val::Num(k));
+        }
+        secs.push(b);
+    }
+
+    // 3. Fermat
+    if algo::is_prime(m as u64) {
+        let mut f = Sec::new("method", "Fermat's little theorem")
+            .intro(format!("{} is prime, so a^(m−1) ≡ 1, which means a^(m−2) is the inverse of a.", m));
+        let v = algo::modpow(r, (m - 2) as u64, m);
+        f.line(format!("{}^{} mod {} = {}", r, m - 2, m, v));
+        f.conclude(format!("inverse = {}", v), Val::Num(v));
+        secs.push(f);
+    }
+    (title, Val::Num(inv), secs)
+}
+
+fn modpow_secs(base: i64, exp: u64, m: i64) -> (String, Val, Vec<Sec>) {
+    let result = algo::modpow(base, exp, m);
+    let title = format!("{}^{} mod {}", base, exp, m);
+    let mut secs = Vec::new();
+
+    let mut s = Sec::new("method", "Square and multiply")
+        .intro("Write the exponent in binary. Walking its bits from the left, square the running result, and multiply by the base whenever the bit is 1. Reduce mod m every time so numbers stay small.");
+    let mb = m as i128;
+    let b0 = (base as i128).rem_euclid(mb);
+    let mut acc: i128 = 1 % mb;
+    let mut rows = Vec::new();
+    let bits: Vec<char> = if exp == 0 { vec!['0'] } else { format!("{:b}", exp).chars().collect() };
+    s.line(format!("{} in binary is {}.", exp, bits.iter().collect::<String>()));
+    if b0 != base as i128 {
+        s.line(format!("Start from the base reduced mod {}: {} ≡ {}.", m, base, b0));
+    }
+    for (i, bit) in bits.iter().enumerate() {
+        let before = acc;
+        acc = acc * acc % mb;
+        let mut what = format!("{}² = {}", before, acc);
+        if *bit == '1' {
+            let sq = acc;
+            acc = acc * b0 % mb;
+            what = format!("{}² = {}, then × {} = {}", before, sq, b0, acc);
+        }
+        rows.push(vec![(i + 1).to_string(), bit.to_string(), format!("{}  (mod {})", what, m), acc.to_string()]);
+    }
+    s.table(&["step", "bit", "work", "result"], rows);
+    s.conclude(format!("{}^{} ≡ {} (mod {})", base, exp, acc, m), Val::Num(acc as i64));
+    secs.push(s);
+
+    if exp <= 100_000 {
+        let mut n = Sec::new("method", "Multiply one at a time")
+            .intro(format!("The slow way: multiply by {} exactly {} times, reducing mod {} after each.", b0, exp, m));
+        let mut v: i128 = 1 % mb;
+        for _ in 0..exp {
+            v = v * b0 % mb;
+        }
+        n.line(format!("After {} multiplications the running value is {}.", exp, v));
+        n.conclude(format!("{}^{} ≡ {} (mod {})", base, exp, v, m), Val::Num(v as i64));
+        secs.push(n);
+    }
+    (title, Val::Num(result), secs)
 }

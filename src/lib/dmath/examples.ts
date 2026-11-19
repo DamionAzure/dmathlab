@@ -99,6 +99,60 @@ DISPLAY B
 CHECK EQUIVALENT A, B`,
   },
   {
+    id: "logic-gates",
+    group: "Propositional Logic",
+    name: "XOR, NAND and NOR",
+    description: "The gates beyond AND / OR / NOT, plus a De Morgan proof",
+    code: `# XOR is "exactly one is TRUE"; NAND and NOR are NOT (AND) and NOT (OR)
+P = TRUE
+Q = FALSE
+
+DISPLAY P XOR Q
+DISPLAY P NAND Q
+DISPLAY P NOR Q
+
+GATE = P XOR Q
+VISUALIZE GATE AS TRUTH_TABLE
+
+# De Morgan: NAND is the same as NOT P OR NOT Q
+CHECK EQUIVALENT P NAND Q, NOT P OR NOT Q`,
+  },
+  {
+    id: "sets-symdiff",
+    group: "Set Theory",
+    name: "Symmetric Difference and Size",
+    description: "SYMDIFF, SIZE, CONTAINS and IS_DISJOINT on two sets",
+    code: `# SYMDIFF keeps what is in exactly one of the two sets
+A = {1, 2, 3, 4}
+B = {3, 4, 5}
+
+C = A SYMDIFF B
+DISPLAY C
+DISPLAY SIZE(C)
+DISPLAY CONTAINS(C, 5)
+DISPLAY IS_DISJOINT(A, B)
+VISUALIZE C AS VENN`,
+  },
+  {
+    id: "sets-powerset",
+    group: "Set Theory",
+    name: "Power Set",
+    description: "All subsets of a set, with a 2^n check",
+    code: `# The power set holds every subset, from {} up to the set itself
+A = {1, 2, 3}
+P = POWERSET(A)
+
+DISPLAY P
+DISPLAY SIZE(P)
+
+# P is a normal set of sets, so you can ask questions about it
+DISPLAY CONTAINS(P, {1, 3})
+DISPLAY CONTAINS(P, {4})
+
+# Nested set literals work too
+DISPLAY P EQUALS {{}, {1}, {2}, {3}, {1, 2}, {1, 3}, {2, 3}, {1, 2, 3}}`,
+  },
+  {
     id: "sets-nested",
     group: "Set Theory",
     name: "Nested Set Expression — spec §3.3",
@@ -247,6 +301,59 @@ VISUALIZE P AS PASCAL
 V = COMB(8, 3)
 DISPLAY V
 VISUALIZE V AS PASCAL`,
+  },
+  {
+    id: "modular-arithmetic",
+    group: "Number Theory",
+    name: "Modular arithmetic — inverses & CRT",
+    description: "MOD, MODPOW, MODINV, EGCD and the Chinese remainder theorem",
+    code: `# Clock arithmetic: results wrap around at the modulus.
+DISPLAY MOD(-7, 5)
+
+# Fast powers: 7^222 mod a big prime, without ever building 7^222.
+DISPLAY MODPOW(7, 222, 1000000007)
+
+# Inverse: 3 · 5 = 15 ≡ 1 (mod 7) — with the full working
+I = MODINV(3, 7)
+DISPLAY I
+VISUALIZE I AS STEPS
+
+# Bezout: 240·(-9) + 46·47 = 2 = GCD(240, 46)
+E = EGCD(240, 46)
+DISPLAY E
+VISUALIZE E AS STEPS
+
+# "x leaves 2 when divided by 3 and 3 when divided by 5"
+DISPLAY CRT(2, 3, 3, 5)`,
+  },
+  {
+    id: "counting-sequences",
+    group: "Combinatorics",
+    name: "Counting — Fibonacci, Catalan, derangements",
+    description: "FIB, CATALAN, DERANGE and STIRLING2",
+    code: `DISPLAY FIB(10)          # 55
+DISPLAY CATALAN(5)       # 42 ways to balance 5 pairs of brackets
+DISPLAY DERANGE(4)       # 9 ways to hand back 4 hats, nobody gets their own
+DISPLAY STIRLING2(5, 2)  # 15 ways to split 5 people into 2 teams`,
+  },
+  {
+    id: "graphs-dag",
+    group: "Graph Theory",
+    name: "Graphs — ordering tasks & components",
+    description: "TOPO_SORT, IS_DAG, COMPONENTS, IS_EULERIAN",
+    code: `# Task 5 must come before 2 and 1, and so on.
+D = DIGRAPH {1,2,3,4,5} {(5,2), (5,1), (2,3), (3,4), (1,4)}
+DISPLAY IS_DAG(D)
+DISPLAY TOPO_SORT(D)
+
+# Which pieces is a network made of?
+G = GRAPH {1,2,3,4,5,6} {(1,2), (2,3), (4,5)}
+DISPLAY COMPONENTS(G)
+
+# A triangle can be walked edge-by-edge and closed up.
+T = GRAPH {1,2,3} {(1,2), (2,3), (1,3)}
+DISPLAY IS_EULERIAN(T)
+DISPLAY DEGREE_SEQUENCE(T)`,
   },
   {
     id: "errors",

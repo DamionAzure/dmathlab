@@ -1414,6 +1414,60 @@ impl Interpreter {
                 )
             }
             // ----- combinatorics -----
+            Builtin::Size => match &vals[0] {
+                Value::Set(s) => (
+                    Value::Number(s.len() as i64),
+                    Some("|S| = the number of distinct elements".to_string()),
+                ),
+                other => return Err(defensive_type_error(func.name(), other, pos)),
+            },
+            Builtin::Contains => {
+                let x = match &vals[1] {
+                    Value::Number(n) => SetElem::Num(*n),
+                    Value::Set(s) => SetElem::Set(s.iter().cloned().collect()),
+                    other => return Err(defensive_type_error(func.name(), other, pos)),
+                };
+                match &vals[0] {
+                    Value::Set(s) => (
+                        Value::Bool(s.contains(&x)),
+                        Some("x ∈ S: the element is a number, or a set when S holds sets (a power set)".to_string()),
+                    ),
+                    other => return Err(defensive_type_error(func.name(), other, pos)),
+                }
+            }
+            Builtin::Powerset => match &vals[0] {
+                Value::Set(s) => {
+                    if s.len() > algo::MAX_POWERSET_ELEMS {
+                        return Err(Diagnostic::error(
+                            pos.0,
+                            pos.1,
+                            format!(
+                                "POWERSET supports sets of at most {} elements, but '{}' has {}.",
+                                algo::MAX_POWERSET_ELEMS,
+                                what0,
+                                s.len()
+                            ),
+                        )
+                        .with_hint(format!(
+                            "A set of n elements has 2^n subsets ({} elements would give {}).",
+                            s.len(),
+                            1u128 << s.len().min(100)
+                        )));
+                    }
+                    (
+                        Value::Set(algo::powerset(s)),
+                        Some(format!("2^{} = {} subsets, from {{}} up to the set itself", s.len(), 1u64 << s.len())),
+                    )
+                }
+                other => return Err(defensive_type_error(func.name(), other, pos)),
+            },
+            Builtin::IsDisjoint => match (&vals[0], &vals[1]) {
+                (Value::Set(a), Value::Set(b)) => (
+                    Value::Bool(a.is_disjoint(b)),
+                    Some("TRUE when A INTERSECT B is empty".to_string()),
+                ),
+                (other, _) => return Err(defensive_type_error(func.name(), other, pos)),
+            },
             Builtin::Fact => {
                 let n = self.number_arg(&vals[0], func.name(), &what0, *pos)?;
                 if n < 0 {
@@ -1492,6 +1546,181 @@ impl Interpreter {
                     pascal_value(n as usize),
                     Some("row i holds C(i, 0) … C(i, i)".to_string()),
                 )
+            }
+            // ----- modular arithmetic -----
+            Builtin::Mod => {
+                let (a, m) = self.two_number_args(&vals, func.name(), *pos)?;
+                if m < 1 {
+                    return Err(range_error(func.name(), m, "a positive modulus m, but the modulus was", pos));
+                }
+                (Value::Number(algo::modulo(a, m)), Some("remainder in 0 … m−1".to_string()))
+            }
+            Builtin::ModPow => {
+                let base = self.number_arg(&vals[0], func.name(), "", *pos)?;
+                let exp = self.number_arg(&vals[1], func.name(), "", *pos)?;
+                let m = self.number_arg(&vals[2], func.name(), "", *pos)?;
+                if m < 1 {
+                    return Err(range_error(func.name(), m, "a positive modulus m, but the modulus was", pos));
+                }
+                if exp < 0 {
+                    return Err(range_error(func.name(), exp, "a non-negative exponent, but the exponent was", pos)
+                        .with_hint("For a negative power, use MODINV first."));
+                }
+                (Value::Number(algo::modpow(base, exp as u64, m)), Some("square-and-multiply".to_string()))
+            }
+            Builtin::ModInv => {
+                let (a, m) = self.two_number_args(&vals, func.name(), *pos)?;
+                if m < 2 {
+                    return Err(range_error(func.name(), m, "a modulus of at least 2, but the modulus was", pos));
+                }
+                match algo::modinv(a, m) {
+                    Some(x) => (Value::Number(x), Some(format!("{}·{} ≡ 1 (mod {})", a, x, m))),
+                    None => {
+                        let g = algo::gcd(a, m);
+                        return Err(Diagnostic::error(
+                            pos.0,
+                            pos.1,
+                            format!("{} has no inverse modulo {} because GCD({}, {}) = {}, not 1.", a, m, a, m, g),
+                        )
+                        .with_hint("An inverse exists only when the two numbers share no factor."));
+                    }
+                }
+            }
+            Builtin::Egcd => {
+                let (a, b) = self.two_number_args(&vals, func.name(), *pos)?;
+                let (g, x, y) = algo::egcd(a, b);
+                (
+                    list_value([g, x, y]),
+                    Some(format!("[g, x, y] with {}·x + {}·y = g", a, b)),
+                )
+            }
+            Builtin::Crt => {
+                let a1 = self.number_arg(&vals[0], func.name(), "", *pos)?;
+                let m1 = self.number_arg(&vals[1], func.name(), "", *pos)?;
+                let a2 = self.number_arg(&vals[2], func.name(), "", *pos)?;
+                let m2 = self.number_arg(&vals[3], func.name(), "", *pos)?;
+                for m in [m1, m2] {
+                    if m < 1 {
+                        return Err(range_error(func.name(), m, "positive moduli, but a modulus was", pos));
+                    }
+                }
+                match algo::crt(a1, m1, a2, m2) {
+                    Ok((x, lcm)) => (
+                        list_value([x, lcm]),
+                        Some(format!("[x, M]: x ≡ {} (mod {}) and x ≡ {} (mod {}) exactly when x ≡ {} (mod {})", a1, m1, a2, m2, x, lcm)),
+                    ),
+                    Err(msg) => {
+                        return Err(Diagnostic::error(pos.0, pos.1, msg)
+                            .with_hint("With coprime moduli there is always exactly one solution."));
+                    }
+                }
+            }
+            // ----- more counting -----
+            Builtin::Fib => {
+                let n = self.number_arg(&vals[0], func.name(), &what0, *pos)?;
+                if n < 0 || n > algo::FIB_MAX_N {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("FIB requires n from 0 to {}, but got {}.", algo::FIB_MAX_N, n),
+                    )
+                    .with_hint(format!("FIB({}) is the largest Fibonacci number that fits in a 64-bit number.", algo::FIB_MAX_N)));
+                }
+                (Value::Number(algo::fib(n)), Some("F(0) = 0, F(1) = 1, F(n) = F(n−1) + F(n−2)".to_string()))
+            }
+            Builtin::Catalan => {
+                let n = self.number_arg(&vals[0], func.name(), &what0, *pos)?;
+                if n < 0 || n > algo::CATALAN_MAX_N {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("CATALAN requires n from 0 to {}, but got {}.", algo::CATALAN_MAX_N, n),
+                    ));
+                }
+                match algo::catalan_checked(n) {
+                    Some(v) => (Value::Number(v), Some("C(n) = C(2n, n) / (n + 1)".to_string())),
+                    None => return Err(Diagnostic::error(pos.0, pos.1, "CATALAN result does not fit in a 64-bit number.")),
+                }
+            }
+            Builtin::Derange => {
+                let n = self.number_arg(&vals[0], func.name(), &what0, *pos)?;
+                if n < 0 || n > algo::DERANGE_MAX_N {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("DERANGE requires n from 0 to {}, but got {}.", algo::DERANGE_MAX_N, n),
+                    ));
+                }
+                match algo::derange_checked(n) {
+                    Some(v) => (Value::Number(v), Some("arrangements of n items where none stays in place".to_string())),
+                    None => return Err(Diagnostic::error(pos.0, pos.1, "DERANGE result does not fit in a 64-bit number.")),
+                }
+            }
+            Builtin::Stirling2 => {
+                let (n, k) = self.two_number_args(&vals, func.name(), *pos)?;
+                if n < 0 || k < 0 {
+                    return Err(range_error(func.name(), n.min(k), "non-negative", pos));
+                }
+                if n > algo::STIRLING_MAX_N {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("STIRLING2 requires n ≤ {}, but got {}.", algo::STIRLING_MAX_N, n),
+                    ));
+                }
+                if k > n {
+                    return Err(k_exceeds_n_error("STIRLING2", n, k, pos));
+                }
+                match algo::stirling2_checked(n, k) {
+                    Some(v) => (Value::Number(v), Some("ways to split n items into k non-empty groups".to_string())),
+                    None => return Err(Diagnostic::error(pos.0, pos.1, "STIRLING2 result does not fit in a 64-bit number.")),
+                }
+            }
+            // ----- more graph tools -----
+            Builtin::TopoSort => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                if !g.directed {
+                    return Err(needs_digraph("TOPO_SORT", pos));
+                }
+                match algo::topo_sort(&g) {
+                    Ok(order) => (list_value(order), Some("Kahn's algorithm, smallest available vertex first".to_string())),
+                    Err(stuck) => {
+                        return Err(Diagnostic::error(
+                            pos.0,
+                            pos.1,
+                            format!("{} has a cycle, so it has no topological order.", what0),
+                        )
+                        .with_hint(format!(
+                            "Vertices on or behind a cycle: {}.",
+                            stuck.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                }
+            }
+            Builtin::IsDag => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                if !g.directed {
+                    return Err(needs_digraph("IS_DAG", pos));
+                }
+                (Value::Bool(algo::topo_sort(&g).is_ok()), Some("a directed graph with no cycle".to_string()))
+            }
+            Builtin::Components => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                (
+                    Value::Mapping(algo::components(&g)),
+                    Some("vertex → component number (directions ignored)".to_string()),
+                )
+            }
+            Builtin::IsEulerian => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                (
+                    Value::Bool(algo::is_eulerian(&g)),
+                    Some("one connected piece of edges with every vertex balanced (even degree, or in = out)".to_string()),
+                )
+            }
+            Builtin::DegreeSequence => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                (list_value(algo::degree_sequence(&g)), Some("degrees, largest first".to_string()))
             }
         };
 
@@ -1815,12 +2044,7 @@ impl Interpreter {
             Expr::SetLit { items, .. } => {
                 let s: BTreeSet<SetElem> = items
                     .iter()
-                    .map(|i| match i {
-                        SetItem::Num { v, .. } => SetElem::Num(*v),
-                        SetItem::Tuple { items, .. } => SetElem::Tuple(
-                            items.iter().map(|v| SetElem::Num(*v)).collect(),
-                        ),
-                    })
+                    .map(item_to_elem)
                     .collect();
                 Ok(Value::Set(s))
             }
@@ -1894,6 +2118,9 @@ impl Interpreter {
                         BinOp::Or => lb || rb,
                         BinOp::Implies => !lb || rb,
                         BinOp::Iff => lb == rb,
+                        BinOp::Xor => lb != rb,
+                        BinOp::Nand => !(lb && rb),
+                        BinOp::Nor => !(lb || rb),
                         _ => unreachable!(),
                     };
                     self.record(Intermediate {
@@ -1919,6 +2146,7 @@ impl Interpreter {
                         BinOp::Union => ls | rs,
                         BinOp::Intersect => ls & rs,
                         BinOp::Difference => ls - rs,
+                        BinOp::SymDiff => ls ^ rs,
                         BinOp::Cross => {
                             if ls.len().saturating_mul(rs.len()) > MAX_CROSS_PRODUCT {
                                 return Err(Diagnostic::error(
@@ -1996,6 +2224,20 @@ impl Interpreter {
             result: operand.display(),
             detail: Some(detail),
         });
+    }
+}
+
+/// A set-literal item as a runtime element (nested sets are sorted and unique).
+fn item_to_elem(i: &SetItem) -> SetElem {
+    match i {
+        SetItem::Num { v, .. } => SetElem::Num(*v),
+        SetItem::Tuple { items, .. } => {
+            SetElem::Tuple(items.iter().map(|v| SetElem::Num(*v)).collect())
+        }
+        SetItem::Set { items, .. } => {
+            let s: BTreeSet<SetElem> = items.iter().map(item_to_elem).collect();
+            SetElem::Set(s.into_iter().collect())
+        }
     }
 }
 
@@ -2159,6 +2401,12 @@ fn provenance_error(kind: &str, expr: &Expr, recipe: &str) -> Diagnostic {
     .with_hint(format!("Try {}.", recipe))
 }
 
+/// TOPO_SORT / IS_DAG on an undirected graph.
+fn needs_digraph(who: &str, pos: &Pos) -> Diagnostic {
+    Diagnostic::error(pos.0, pos.1, format!("{} needs a directed graph.", who))
+        .with_hint("Write it as DIGRAPH {vertices} {edges}: an arrow only goes one way.")
+}
+
 /// Build a `Value::List` of numbers.
 fn list_value(items: impl IntoIterator<Item = i64>) -> Value {
     Value::List(items.into_iter().map(SetElem::Num).collect())
@@ -2251,11 +2499,15 @@ fn op_label(op: &BinOp) -> &'static str {
         BinOp::Union => "Union",
         BinOp::Intersect => "Intersection",
         BinOp::Difference => "Difference",
+        BinOp::SymDiff => "Symmetric difference",
         BinOp::Cross => "Cartesian product",
         BinOp::And => "Conjunction",
         BinOp::Or => "Disjunction",
         BinOp::Implies => "Implication",
         BinOp::Iff => "Biconditional",
+        BinOp::Xor => "Exclusive or",
+        BinOp::Nand => "Not-and",
+        BinOp::Nor => "Not-or",
         BinOp::Subset => "Subset",
         BinOp::Equals => "Equality",
     }

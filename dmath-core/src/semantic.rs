@@ -76,7 +76,7 @@ pub fn check_statement(
                                 dtype.name()
                             ),
                         )
-                        .with_hint("Write propositional formulas with AND, OR, NOT, IMPLIES, IFF."));
+                        .with_hint("Write propositional formulas with AND, OR, NOT, XOR, NAND, NOR, IMPLIES, IFF."));
                     }
                     // Expand compound Boolean variables into their symbolic
                     // expressions so the table enumerates the real free
@@ -320,6 +320,10 @@ fn expr_origin(e: &Expr, origins: &OriginTable) -> ValueOrigin {
 pub enum Param {
     /// A set (at runtime required to be a relation: only ordered pairs).
     Relation,
+    /// Any set (numbers or pairs), unlike `Relation` which needs ordered pairs.
+    SetAny,
+    /// A number or a set, used where either can be an element of a set.
+    Element,
     Graph,
     Number,
 }
@@ -328,6 +332,8 @@ impl Param {
     pub fn name(self) -> &'static str {
         match self {
             Param::Relation => "relation",
+            Param::SetAny => "set",
+            Param::Element => "element",
             Param::Graph => "Graph",
             Param::Number => "vertex",
         }
@@ -338,11 +344,16 @@ impl Param {
 pub fn builtin_signature(f: Builtin) -> (&'static [Param], DType) {
     const R: &[Param] = &[Param::Relation];
     const RR: &[Param] = &[Param::Relation, Param::Relation];
+    const S: &[Param] = &[Param::SetAny];
+    const SS: &[Param] = &[Param::SetAny, Param::SetAny];
+    const SE: &[Param] = &[Param::SetAny, Param::Element];
     const G: &[Param] = &[Param::Graph];
     const GN: &[Param] = &[Param::Graph, Param::Number];
     const GNN: &[Param] = &[Param::Graph, Param::Number, Param::Number];
     const N: &[Param] = &[Param::Number];
     const NN: &[Param] = &[Param::Number, Param::Number];
+    const NNN: &[Param] = &[Param::Number, Param::Number, Param::Number];
+    const NNNN: &[Param] = &[Param::Number, Param::Number, Param::Number, Param::Number];
     match f {
         Builtin::Inverse => (R, DType::Set),
         Builtin::Compose => (RR, DType::Set),
@@ -380,6 +391,24 @@ pub fn builtin_signature(f: Builtin) -> (&'static [Param], DType) {
         Builtin::Perm => (NN, DType::Number),
         Builtin::Comb => (NN, DType::Number),
         Builtin::Pascal => (N, DType::List),
+        Builtin::Mod => (NN, DType::Number),
+        Builtin::ModPow => (NNN, DType::Number),
+        Builtin::ModInv => (NN, DType::Number),
+        Builtin::Egcd => (NN, DType::List),
+        Builtin::Crt => (NNNN, DType::List),
+        Builtin::Fib => (N, DType::Number),
+        Builtin::Catalan => (N, DType::Number),
+        Builtin::Derange => (N, DType::Number),
+        Builtin::Stirling2 => (NN, DType::Number),
+        Builtin::TopoSort => (G, DType::List),
+        Builtin::Size => (S, DType::Number),
+        Builtin::Contains => (SE, DType::Bool),
+        Builtin::Powerset => (S, DType::Set),
+        Builtin::IsDisjoint => (SS, DType::Bool),
+        Builtin::IsDag => (G, DType::Bool),
+        Builtin::Components => (G, DType::Mapping),
+        Builtin::IsEulerian => (G, DType::Bool),
+        Builtin::DegreeSequence => (G, DType::List),
     }
 }
 
@@ -400,6 +429,13 @@ pub fn builtin_usage(f: Builtin) -> String {
         Builtin::Fact => vec!["n (0 to 20)".into()],
         Builtin::Perm | Builtin::Comb => vec!["n".into(), "k".into()],
         Builtin::Pascal => vec!["rows (1 to 25)".into()],
+        Builtin::Mod => vec!["a".into(), "m".into()],
+        Builtin::ModPow => vec!["base".into(), "exponent".into(), "m".into()],
+        Builtin::ModInv => vec!["a".into(), "m".into()],
+        Builtin::Egcd => vec!["a".into(), "b".into()],
+        Builtin::Contains => vec!["set".into(), "element".into()],
+        Builtin::Crt => vec!["a1".into(), "m1".into(), "a2".into(), "m2".into()],
+        Builtin::Stirling2 => vec!["n".into(), "k".into()],
         _ => params.iter().map(|p| p.name().to_string()).collect(),
     };
     format!("{}({})", f.name(), names.join(", "))
@@ -423,7 +459,11 @@ pub fn infer(e: &Expr, types: &SymTable) -> Result<DType, Diagnostic> {
                         return Err(Diagnostic::error(
                             item.pos().0,
                             item.pos().1,
-                            "Set literal cannot mix numbers and ordered pairs.",
+                            if kind0 == 2 || set_item_kind(item) == 2 {
+                                "Set literal cannot mix nested sets with numbers or ordered pairs."
+                            } else {
+                                "Set literal cannot mix numbers and ordered pairs."
+                            },
                         )
                         .with_hint(
                             "Use either all numbers, e.g. {1, 2, 3}, or all pairs, e.g. {(1, 2), (2, 3)}.",
@@ -493,7 +533,8 @@ pub fn infer(e: &Expr, types: &SymTable) -> Result<DType, Diagnostic> {
                 let t = infer(arg, types)?;
                 let want = params[i];
                 let ok = match want {
-                    Param::Relation => t == DType::Set,
+                    Param::Relation | Param::SetAny => t == DType::Set,
+                    Param::Element => t == DType::Set || t == DType::Number,
                     Param::Graph => t == DType::Graph,
                     Param::Number => t == DType::Number,
                 };
@@ -507,6 +548,24 @@ pub fn infer(e: &Expr, types: &SymTable) -> Result<DType, Diagnostic> {
                                 t.name()
                             ),
                             "Build a relation like R = {(1, 2), (2, 3)} or with A CROSS B.".to_string(),
+                        ),
+                        Param::Element => (
+                            format!(
+                                "'{}' needs a number or a set as the element, but '{}' has type {}.",
+                                func.name(),
+                                describe_operand(arg),
+                                t.name()
+                            ),
+                            format!("Usage: {}.", builtin_usage(*func)),
+                        ),
+                        Param::SetAny => (
+                            format!(
+                                "'{}' requires a set, but '{}' has type {}.",
+                                func.name(),
+                                describe_operand(arg),
+                                t.name()
+                            ),
+                            format!("Usage: {}. Build a set like A = {{1, 2, 3}}.", builtin_usage(*func)),
                         ),
                         Param::Graph => (
                             format!(
@@ -589,6 +648,7 @@ fn set_item_kind(item: &SetItem) -> u8 {
     match item {
         SetItem::Num { .. } => 0,
         SetItem::Tuple { .. } => 1,
+        SetItem::Set { .. } => 2,
     }
 }
 
@@ -639,7 +699,9 @@ fn type_error_binary(
             got.name()
         ),
     );
-    if op.is_logic() && got == DType::Set {
+    if op == BinOp::Xor && got == DType::Set {
+        d = d.with_hint("XOR works on Booleans. For sets use SYMDIFF (elements in exactly one of the two sets).");
+    } else if op.is_logic() && got == DType::Set {
         d = d.with_hint(format!(
             "Sets do not support '{}'. Did you mean a set operation like UNION or INTERSECT?",
             op.symbol()

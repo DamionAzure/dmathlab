@@ -26,10 +26,14 @@ pub enum BinOp {
     Or,
     Implies,
     Iff,
+    Xor,
+    Nand,
+    Nor,
     // Set algebra
     Union,
     Intersect,
     Difference,
+    SymDiff,
     Cross,
     // Set comparisons (yield Boolean)
     Subset,
@@ -43,35 +47,46 @@ impl BinOp {
             BinOp::Or => "OR",
             BinOp::Implies => "IMPLIES",
             BinOp::Iff => "IFF",
+            BinOp::Xor => "XOR",
+            BinOp::Nand => "NAND",
+            BinOp::Nor => "NOR",
             BinOp::Union => "UNION",
             BinOp::Intersect => "INTERSECT",
             BinOp::Difference => "DIFFERENCE",
+            BinOp::SymDiff => "SYMDIFF",
             BinOp::Cross => "CROSS",
             BinOp::Subset => "SUBSET",
             BinOp::Equals => "EQUALS",
         }
     }
 
-    /// Binding power, from loosest (1) to tightest (8).
+    /// Binding power, from loosest (1) to tightest (9).
     pub fn precedence(&self) -> u8 {
         match self {
             BinOp::Subset | BinOp::Equals => 1,
             BinOp::Iff => 2,
             BinOp::Implies => 3,
-            BinOp::Or => 4,
-            BinOp::And => 5,
-            BinOp::Union | BinOp::Difference => 6,
-            BinOp::Intersect => 7,
-            BinOp::Cross => 8,
+            BinOp::Or | BinOp::Nor => 4,
+            BinOp::Xor => 5,
+            BinOp::And | BinOp::Nand => 6,
+            BinOp::Union | BinOp::Difference | BinOp::SymDiff => 7,
+            BinOp::Intersect => 8,
+            BinOp::Cross => 9,
         }
     }
 
     pub fn is_logic(&self) -> bool {
-        matches!(self, BinOp::And | BinOp::Or | BinOp::Implies | BinOp::Iff)
+        matches!(
+            self,
+            BinOp::And | BinOp::Or | BinOp::Implies | BinOp::Iff | BinOp::Xor | BinOp::Nand | BinOp::Nor
+        )
     }
 
     pub fn is_set_op(&self) -> bool {
-        matches!(self, BinOp::Union | BinOp::Intersect | BinOp::Difference | BinOp::Cross)
+        matches!(
+            self,
+            BinOp::Union | BinOp::Intersect | BinOp::Difference | BinOp::SymDiff | BinOp::Cross
+        )
     }
 
     pub fn is_comparison(&self) -> bool {
@@ -89,12 +104,14 @@ impl BinOp {
 pub enum SetItem {
     Num { v: i64, pos: Pos },
     Tuple { items: Vec<i64>, pos: Pos },
+    /// A nested set literal such as `{1, 2}` inside `{{1, 2}, {3}}`.
+    Set { items: Vec<SetItem>, pos: Pos },
 }
 
 impl SetItem {
     pub fn pos(&self) -> Pos {
         match self {
-            SetItem::Num { pos, .. } | SetItem::Tuple { pos, .. } => *pos,
+            SetItem::Num { pos, .. } | SetItem::Tuple { pos, .. } | SetItem::Set { pos, .. } => *pos,
         }
     }
 }

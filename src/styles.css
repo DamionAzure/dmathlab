@@ -16,6 +16,16 @@
   font-weight: 400; font-style: normal; font-display: swap;
 }
 @font-face {
+  font-family: "Themerity Labs";
+  src: url("./assets/fonts/themerity-labs.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Paramache";
+  src: url("./assets/fonts/paramache.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
   font-family: "Parafigure";
   src: url("./assets/fonts/parafigure.ttf") format("truetype");
   font-weight: 400; font-style: normal; font-display: swap;
@@ -214,22 +224,54 @@ html, body { max-width: 100%; overflow-x: clip; -webkit-text-size-adjust: 100%; 
 [data-slot="card-content"] { overflow-x: auto; }
 
 /* ── Kaylei type system ──────────────────────────────────────────────────────
-   Xylo Mirage Display → wordmark only        (.font-brand)
-   Parafigure          → card + dialog titles (rounded, heavier, reads at 14–18px)
-   Para                → controls & labels    (buttons, selects, badges)
-   Inter / JetBrains   → body text and code (unchanged; they carry the math glyphs)
-   The display faces are single-weight: stop browsers from faux-bolding them. */
+   Xylo Mirage Display is the wordmark and never changes (.font-brand).
+   Headings and controls follow the user's font preference (data-font on <html>);
+   body text and code stay on Inter / JetBrains Mono, which carry the math glyphs.
+   The display faces are single-weight, so faux-bold is switched off for them. */
+:root, html[data-font="kaylei"] {
+  --kf-heading: "Parafigure", var(--font-geist-sans), sans-serif;
+  --kf-ui: "Para", var(--font-geist-sans), sans-serif;
+  --kf-heading-weight: 400; --kf-ui-weight: 400; --kf-heading-size: 0.95rem; --kf-tracking: 0.01em;
+}
+html[data-font="clean"] {
+  --kf-heading: var(--font-geist-sans), system-ui, sans-serif;
+  --kf-ui: var(--font-geist-sans), system-ui, sans-serif;
+  --kf-heading-weight: 700; --kf-ui-weight: 500; --kf-heading-size: 0.875rem; --kf-tracking: 0;
+}
+html[data-font="bold"] {
+  --kf-heading: "Themerity Labs", var(--font-geist-sans), sans-serif;
+  --kf-ui: "Para", var(--font-geist-sans), sans-serif;
+  --kf-heading-weight: 400; --kf-ui-weight: 400; --kf-heading-size: 1rem; --kf-tracking: 0.01em;
+}
+html[data-font="compact"] {
+  --kf-heading: "Paramache", var(--font-geist-sans), sans-serif;
+  --kf-ui: "Paramache", var(--font-geist-sans), sans-serif;
+  --kf-heading-weight: 400; --kf-ui-weight: 400; --kf-heading-size: 1.05rem; --kf-tracking: 0.02em;
+}
 [data-slot="card-title"], .font-heading {
-  font-family: "Parafigure", var(--font-geist-sans), sans-serif;
-  font-weight: 400;
-  font-size: 0.95rem;
-  letter-spacing: 0.01em;
-  font-synthesis: none;
+  font-family: var(--kf-heading);
+  font-weight: var(--kf-heading-weight);
+  font-size: var(--kf-heading-size);
+  letter-spacing: var(--kf-tracking);
 }
 button, [role="combobox"], [data-slot="badge"], [data-slot="select-item"], [data-slot="select-label"] {
-  font-family: "Para", var(--font-geist-sans), sans-serif;
-  font-weight: 400;
-  letter-spacing: 0.01em;
-  font-synthesis: none;
+  font-family: var(--kf-ui);
+  font-weight: var(--kf-ui-weight);
+  letter-spacing: var(--kf-tracking);
 }
+html:not([data-font="clean"]) [data-slot="card-title"],
+html:not([data-font="clean"]) .font-heading,
+html:not([data-font="clean"]) button,
+html:not([data-font="clean"]) [role="combobox"],
+html:not([data-font="clean"]) [data-slot="badge"] { font-synthesis: none; }
 .font-brand { font-synthesis: none; }
+
+/* ── Print / "Save as PDF": just the results and pictures, no controls ───── */
+@media print {
+  header, [data-print-hide], [role="dialog"], [role="toolbar"], textarea, button { display: none !important; }
+  .keep-dark { display: none !important; }
+  html, body, .bg-zinc-100 { background: #fff !important; }
+  [data-slot="card"] { break-inside: avoid; box-shadow: none !important; border-color: #ddd !important; }
+  main { max-width: none !important; padding: 0 !important; }
+  .grid { display: block !important; }
+}

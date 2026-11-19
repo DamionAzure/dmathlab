@@ -52,6 +52,25 @@ pub enum Builtin {
     Perm,
     Comb,
     Pascal,
+    // Modular arithmetic, more counting, more graphs
+    Mod,
+    ModPow,
+    ModInv,
+    Egcd,
+    Crt,
+    Fib,
+    Catalan,
+    Derange,
+    Stirling2,
+    TopoSort,
+    Size,
+    Powerset,
+    Contains,
+    IsDisjoint,
+    IsDag,
+    Components,
+    IsEulerian,
+    DegreeSequence,
 }
 
 impl Builtin {
@@ -93,6 +112,24 @@ impl Builtin {
             Builtin::Perm => "PERM",
             Builtin::Comb => "COMB",
             Builtin::Pascal => "PASCAL",
+            Builtin::Mod => "MOD",
+            Builtin::ModPow => "MODPOW",
+            Builtin::ModInv => "MODINV",
+            Builtin::Egcd => "EGCD",
+            Builtin::Crt => "CRT",
+            Builtin::Fib => "FIB",
+            Builtin::Catalan => "CATALAN",
+            Builtin::Derange => "DERANGE",
+            Builtin::Stirling2 => "STIRLING2",
+            Builtin::TopoSort => "TOPO_SORT",
+            Builtin::Size => "SIZE",
+            Builtin::Powerset => "POWERSET",
+            Builtin::Contains => "CONTAINS",
+            Builtin::IsDisjoint => "IS_DISJOINT",
+            Builtin::IsDag => "IS_DAG",
+            Builtin::Components => "COMPONENTS",
+            Builtin::IsEulerian => "IS_EULERIAN",
+            Builtin::DegreeSequence => "DEGREE_SEQUENCE",
         }
     }
 
@@ -134,6 +171,24 @@ impl Builtin {
             "PERM" => Some(Builtin::Perm),
             "COMB" => Some(Builtin::Comb),
             "PASCAL" => Some(Builtin::Pascal),
+            "MOD" => Some(Builtin::Mod),
+            "MODPOW" => Some(Builtin::ModPow),
+            "MODINV" => Some(Builtin::ModInv),
+            "EGCD" => Some(Builtin::Egcd),
+            "CRT" => Some(Builtin::Crt),
+            "FIB" => Some(Builtin::Fib),
+            "CATALAN" => Some(Builtin::Catalan),
+            "DERANGE" => Some(Builtin::Derange),
+            "STIRLING2" => Some(Builtin::Stirling2),
+            "TOPO_SORT" => Some(Builtin::TopoSort),
+            "SIZE" => Some(Builtin::Size),
+            "POWERSET" => Some(Builtin::Powerset),
+            "CONTAINS" => Some(Builtin::Contains),
+            "IS_DISJOINT" => Some(Builtin::IsDisjoint),
+            "IS_DAG" => Some(Builtin::IsDag),
+            "COMPONENTS" => Some(Builtin::Components),
+            "IS_EULERIAN" => Some(Builtin::IsEulerian),
+            "DEGREE_SEQUENCE" => Some(Builtin::DegreeSequence),
             _ => None,
         }
     }
@@ -151,10 +206,14 @@ pub enum TokKind {
     Not,
     Implies,
     Iff,
+    Xor,
+    Nand,
+    Nor,
     // Set operators
     Union,
     Intersect,
     Difference,
+    SymDiff,
     Complement,
     Cross,
     // Set comparisons
@@ -217,9 +276,13 @@ pub fn describe(kind: TokKind) -> String {
         TokKind::Not => "'NOT'",
         TokKind::Implies => "'IMPLIES'",
         TokKind::Iff => "'IFF'",
+        TokKind::Xor => "'XOR'",
+        TokKind::Nand => "'NAND'",
+        TokKind::Nor => "'NOR'",
         TokKind::Union => "'UNION'",
         TokKind::Intersect => "'INTERSECT'",
         TokKind::Difference => "'DIFFERENCE'",
+        TokKind::SymDiff => "'SYMDIFF'",
         TokKind::Complement => "'COMPLEMENT'",
         TokKind::Cross => "'CROSS'",
         TokKind::Subset => "'SUBSET'",
@@ -262,9 +325,13 @@ pub fn keyword(text: &str) -> Option<TokKind> {
         "NOT" => Some(TokKind::Not),
         "IMPLIES" => Some(TokKind::Implies),
         "IFF" => Some(TokKind::Iff),
+        "XOR" => Some(TokKind::Xor),
+        "NAND" => Some(TokKind::Nand),
+        "NOR" => Some(TokKind::Nor),
         "UNION" => Some(TokKind::Union),
         "INTERSECT" => Some(TokKind::Intersect),
         "DIFFERENCE" => Some(TokKind::Difference),
+        "SYMDIFF" => Some(TokKind::SymDiff),
         "COMPLEMENT" => Some(TokKind::Complement),
         "CROSS" => Some(TokKind::Cross),
         "SUBSET" => Some(TokKind::Subset),
@@ -288,8 +355,8 @@ pub fn keyword(text: &str) -> Option<TokKind> {
 
 /// The keywords understood by the lexer (used by the editor highlighter).
 pub const KEYWORDS: &[&str] = &[
-    "TRUE", "FALSE", "AND", "OR", "NOT", "IMPLIES", "IFF", "UNION", "INTERSECT",
-    "DIFFERENCE", "COMPLEMENT", "CROSS", "SUBSET", "EQUALS", "DISPLAY", "VISUALIZE",
+    "TRUE", "FALSE", "AND", "OR", "NOT", "IMPLIES", "IFF", "XOR", "NAND", "NOR", "UNION",
+    "INTERSECT", "SYMDIFF", "DIFFERENCE", "COMPLEMENT", "CROSS", "SUBSET", "EQUALS", "DISPLAY", "VISUALIZE",
     "AS", "CHECK", "EQUIVALENT", "TRUTH_TABLE", "VENN", "UNIVERSE",
     // Relations & graphs
     "PROPERTIES", "DIGRAPH", "HASSE", "MATRIX", "GRAPH", "STEPS",
@@ -302,6 +369,10 @@ pub const KEYWORDS: &[&str] = &[
     // Number theory & combinatorics
     "IS_PRIME", "FACTORS", "DIVISORS", "GCD", "LCM", "TOTIENT", "SIEVE",
     "FACT", "PERM", "COMB", "PASCAL",
+    "MOD", "MODPOW", "MODINV", "EGCD", "CRT", "FIB", "CATALAN", "DERANGE", "STIRLING2",
+    "TOPO_SORT", "IS_DAG", "COMPONENTS", "IS_EULERIAN", "DEGREE_SEQUENCE",
+    // Set utilities
+    "SIZE", "POWERSET", "CONTAINS", "IS_DISJOINT",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

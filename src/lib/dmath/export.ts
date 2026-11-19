@@ -3,7 +3,7 @@
 // baked in, so the file looks like the screen (without relying on our CSS).
 
 import { invoke } from "@tauri-apps/api/core";
-import type { RelationMatrixIr, StepsIr, TruthTableIr } from "./types";
+import type { DMathEnvelope, RelationMatrixIr, StepsIr, TruthTableIr } from "./types";
 
 type ExportExt = "png" | "svg" | "md";
 
@@ -141,4 +141,42 @@ export function truthTableToMarkdown(ir: TruthTableIr): string {
 export function matrixToMarkdown(ir: RelationMatrixIr): string {
   const rows = ir.matrix.map((r, i) => [String(ir.vertices[i]), ...r.map(String)]);
   return [`# Relation matrix: ${ir.expression}`, "", mdTable(["", ...ir.vertices.map(String)], rows), ""].join("\n");
+}
+
+/** The whole session as one Markdown report: program, results, then tables and worked solutions. */
+export function sessionToMarkdown(source: string, env: DMathEnvelope | null): string {
+  const out: string[] = ["# Kaylei session", "", "## Program", "", "```", source.trimEnd(), "```", ""];
+  if (!env) return out.join("\n") + "\n";
+  if (env.outputs.length) {
+    out.push("## Results", "");
+    for (const o of env.outputs) out.push(`- \`${o.expression}\` = **${o.display}**`);
+    out.push("");
+  }
+  const errs = env.diagnostics.filter((d) => d.severity === "error");
+  if (errs.length) {
+    out.push("## Errors", "");
+    for (const d of errs) out.push(`- line ${d.line}: ${d.message}${d.hint ? ` _(${d.hint})_` : ""}`);
+    out.push("");
+  }
+  for (const v of env.visualizations) {
+    if (v.type === "steps") out.push(stepsToMarkdown(v).replace(/^# /, "## "));
+    else if (v.type === "truth_table") out.push(truthTableToMarkdown(v).replace(/^# /, "## "));
+    else if (v.type === "relation_matrix") out.push(matrixToMarkdown(v).replace(/^# /, "## "));
+  }
+  return out.join("\n") + "\n";
+}
+
+/** Save through the desktop app, or download in the browser. */
+export async function saveOrDownload(name: string, ext: ExportExt, text: string): Promise<string | null> {
+  try {
+    return await saveExport(name, ext, text);
+  } catch {
+    const url = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+    const a = Object.assign(document.createElement("a"), { href: url, download: name });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return name;
+  }
 }

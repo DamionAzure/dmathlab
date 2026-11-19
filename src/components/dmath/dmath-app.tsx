@@ -12,7 +12,11 @@ import {
   Braces,
   Eraser,
   FlaskConical,
+  Keyboard,
+  Link2,
   Loader2,
+  Printer,
+  FileDown,
   Monitor,
   Moon,
   Play,
@@ -23,6 +27,7 @@ import {
 } from "lucide-react";
 
 import { useTheme } from "@/lib/dmath/theme";
+import { SettingsMenu } from "./settings-menu";
 import { ReferenceDialog } from "@/components/dmath/reference-dialog";
 import { ExportableCard } from "@/components/dmath/export-bar";
 import { Badge } from "@/components/ui/badge";
@@ -37,7 +42,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CodeEditor } from "@/components/dmath/code-editor";
+import { CodeEditor, type CodeEditorHandle } from "@/components/dmath/code-editor";
+import { SymbolBar } from "./symbol-bar";
+import { ShortcutsDialog } from "./shortcuts-dialog";
+import { saveOrDownload, sessionToMarkdown } from "@/lib/dmath/export";
 import { OutputPanel } from "@/components/dmath/output-panel";
 import { TracePanel } from "@/components/dmath/trace-panel";
 import { TruthTableView } from "@/components/dmath/viz/truth-table-view";
@@ -66,11 +74,77 @@ import {
 import { DEFAULT_EXAMPLE, EXAMPLES, EXAMPLE_GROUPS } from "@/lib/dmath/examples";
 import { isPropertyCheckIr, type DMathEnvelope, type VizIr } from "@/lib/dmath/types";
 
+const SOURCE_KEY = "kaylei.source";
+
+/** Program from a `#p=` share link, else the last autosaved one. */
+function loadInitialSource(): string | null {
+  try {
+    const m = /[#&]p=([^&]+)/.exec(window.location.hash);
+    if (m) {
+      const bin = atob(m[1].replace(/-/g, "+").replace(/_/g, "/"));
+      return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    }
+  } catch {
+    /* bad link: fall through */
+  }
+  try {
+    return localStorage.getItem(SOURCE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function canShare(): boolean {
+  return typeof window !== "undefined" && /^https?:$/.test(window.location.protocol);
+}
+
+function shareUrl(source: string): string {
+  const bytes = new TextEncoder().encode(source);
+  let bin = "";
+  bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `${window.location.origin}${window.location.pathname}#p=${b64}`;
+}
+
 export function DMathApp() {
   const { choice: theme, cycle: cycleTheme } = useTheme();
-  const [source, setSource] = useState(DEFAULT_EXAMPLE.code);
+  // Start from a shared link, else the last session's program, else the default example.
+  const [initial] = useState(() => loadInitialSource() ?? DEFAULT_EXAMPLE.code);
+  const [source, setSource] = useState(initial);
+  const editorRef = useRef<CodeEditorHandle>(null);
   const [refOpen, setRefOpen] = useState(false);
-  const [exampleId, setExampleId] = useState<string>(DEFAULT_EXAMPLE.id);
+  const [keysOpen, setKeysOpen] = useState(false);
+  const [welcome, setWelcome] = useState(() => {
+    try {
+      return localStorage.getItem("kaylei.welcomed") !== "1";
+    } catch {
+      return false;
+    }
+  });
+  const dismissWelcome = () => {
+    setWelcome(false);
+    try {
+      localStorage.setItem("kaylei.welcomed", "1");
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // "?" opens the shortcut list unless you are typing somewhere.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key === "?" && !(t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT"))) setKeysOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const exportSession = async () => {
+    const saved = await saveOrDownload("kaylei-session.md", "md", sessionToMarkdown(source, envelope));
+    if (saved) setNotice("Session saved as Markdown.");
+  };
+  const [exampleId, setExampleId] = useState<string>(initial === DEFAULT_EXAMPLE.code ? DEFAULT_EXAMPLE.id : "");
   const [envelope, setEnvelope] = useState<DMathEnvelope | null>(null);
   const [engine, setEngine] = useState<DMathEngine | null>(null);
   const [engineError, setEngineError] = useState<string | null>(null);
@@ -79,9 +153,30 @@ export function DMathApp() {
 
   // Document (file) state. `dirty` = edited since last open/save/example load.
   const [filePath, setFilePath] = useState<string | null>(null);
-  const [savedSource, setSavedSource] = useState(DEFAULT_EXAMPLE.code);
+  const [savedSource, setSavedSource] = useState(initial);
   const [notice, setNotice] = useState<string | null>(null);
   const dirty = source !== savedSource;
+
+  // Remember the program between visits (best effort).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(SOURCE_KEY, source);
+      } catch {
+        /* storage unavailable */
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [source]);
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl(source));
+      setNotice("Link copied. Anyone who opens it gets this program.");
+    } catch {
+      setNotice("Couldn't copy the link from here.");
+    }
+  };
 
   // Load the Rust core once.
   useEffect(() => {
@@ -272,6 +367,16 @@ export function DMathApp() {
             </button>
             <button
               type="button"
+              onClick={() => setKeysOpen(true)}
+              title="Keyboard shortcuts (?)"
+              aria-label="Keyboard shortcuts"
+              className="hidden h-7 w-7 items-center justify-center rounded-full border border-zinc-300 text-zinc-600 hover:bg-zinc-100 sm:inline-flex"
+            >
+              <Keyboard className="h-3.5 w-3.5" />
+            </button>
+            <SettingsMenu />
+            <button
+              type="button"
               onClick={cycleTheme}
               title={`Theme: ${theme} (click to change)`}
               aria-label={`Theme: ${theme}. Click to change.`}
@@ -285,6 +390,21 @@ export function DMathApp() {
 
       {/* Main */}
       <main className="mx-auto w-full max-w-[1680px] flex-1 px-4 py-5 sm:px-6">
+        {welcome && (
+          <div data-print-hide className="mb-4 flex items-start gap-3 rounded-xl border border-[#1C9A93]/30 bg-[#1C9A93]/10 p-4 text-sm text-zinc-800">
+            <div className="min-w-0 flex-1 space-y-1">
+              <p className="font-heading text-zinc-900">Welcome to Kaylei</p>
+              <p>
+                Write sets, logic, graphs or number-theory programs on the left and press <strong>Run</strong>. Pick an example to start,
+                tap the symbol bar for quick inserts, and open <strong>Reference</strong> for every function.
+              </p>
+            </div>
+            <button onClick={dismissWelcome} className="shrink-0 rounded-md border border-[#1C9A93]/40 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50">
+              Got it
+            </button>
+          </div>
+        )}
+
         {notice && (
           <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
             <span className="flex-1">{notice}</span>
@@ -350,7 +470,9 @@ export function DMathApp() {
                   onChange={setSource}
                   errorLines={errorLines}
                   onRun={run}
+                  ref={editorRef}
                 />
+                <SymbolBar onInsert={(t, back) => editorRef.current?.insert(t, back)} />
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
                     onClick={run}
@@ -367,6 +489,12 @@ export function DMathApp() {
                       Ctrl+↵
                     </kbd>
                   </Button>
+                  {canShare() && (
+                    <Button variant="outline" size="sm" className="h-9" onClick={copyLink}>
+                      <Link2 className="mr-1.5 h-4 w-4" />
+                      Copy link
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -396,9 +524,29 @@ export function DMathApp() {
                   Output
                 </CardTitle>
                 {envelope && (
+                  <div data-print-hide className="ml-auto flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={exportSession}
+                      className="inline-flex h-7 items-center gap-1 rounded-full border border-zinc-300 px-2.5 text-xs text-zinc-600 hover:bg-zinc-100"
+                      title="Save the program, results and worked solutions as Markdown"
+                    >
+                      <FileDown className="h-3.5 w-3.5" /> Markdown
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      className="inline-flex h-7 items-center gap-1 rounded-full border border-zinc-300 px-2.5 text-xs text-zinc-600 hover:bg-zinc-100"
+                      title="Print or save as PDF"
+                    >
+                      <Printer className="h-3.5 w-3.5" /> PDF
+                    </button>
+                  </div>
+                )}
+                {envelope && (
                   <Badge
                     variant="outline"
-                    className={`ml-auto font-mono text-[11px] ${
+                    className={`font-mono text-[11px] ${
                       envelope.ok
                         ? "border-emerald-300 bg-emerald-50 text-emerald-700"
                         : "border-rose-300 bg-rose-50 text-rose-700"
@@ -409,7 +557,7 @@ export function DMathApp() {
                 )}
               </CardHeader>
               <CardContent>
-                <OutputPanel envelope={envelope} />
+                <OutputPanel envelope={envelope} onJump={(l) => editorRef.current?.jumpToLine(l)} />
               </CardContent>
             </Card>
           </div>
@@ -454,6 +602,7 @@ export function DMathApp() {
           </div>
         </div>
       </main>
+      <ShortcutsDialog open={keysOpen} onClose={() => setKeysOpen(false)} />
       <ReferenceDialog open={refOpen} onClose={() => setRefOpen(false)} onTry={(code) => setSource(code)} />
 
     </div>

@@ -46,7 +46,7 @@ const TYPE_STYLE: Record<string, string> = {
   Graph: "border-rose-300 bg-rose-50 text-rose-700",
 };
 
-function DiagnosticCard({ d }: { d: DiagnosticJson }) {
+function DiagnosticCard({ d, onJump }: { d: DiagnosticJson; onJump?: (line: number) => void }) {
   const style =
     d.severity === "error"
       ? { border: "border-rose-300 bg-rose-50", icon: <AlertCircle className="h-4 w-4 text-rose-600" />, title: "text-rose-900" }
@@ -61,9 +61,15 @@ function DiagnosticCard({ d }: { d: DiagnosticJson }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`font-medium ${style.title}`}>{d.message}</span>
-            <span className="rounded border border-zinc-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-zinc-500">
+            <button
+              type="button"
+              onClick={() => onJump?.(d.line)}
+              disabled={!onJump}
+              title={onJump ? "Jump to this line in the editor" : undefined}
+              className={`rounded border border-zinc-200 bg-white px-1.5 py-0.5 font-mono text-[11px] text-zinc-500 ${onJump ? "underline decoration-dotted underline-offset-2 hover:border-zinc-400 hover:text-zinc-800" : ""}`}
+            >
               line {d.line}, col {d.col}
-            </span>
+            </button>
             <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
               {d.severity}
             </span>
@@ -80,7 +86,7 @@ function DiagnosticCard({ d }: { d: DiagnosticJson }) {
   );
 }
 
-export function OutputPanel({ envelope }: { envelope: DMathEnvelope | null }) {
+export function OutputPanel({ envelope, onJump }: { envelope: DMathEnvelope | null; onJump?: (line: number) => void }) {
   if (!envelope) {
     return (
       <p className="py-6 text-center text-sm text-zinc-400">
@@ -100,7 +106,7 @@ export function OutputPanel({ envelope }: { envelope: DMathEnvelope | null }) {
       {errors.length > 0 && (
         <div className="space-y-2">
           {errors.map((d, i) => (
-            <DiagnosticCard key={i} d={d} />
+            <DiagnosticCard key={i} d={d} onJump={onJump} />
           ))}
         </div>
       )}
@@ -172,7 +178,7 @@ export function OutputPanel({ envelope }: { envelope: DMathEnvelope | null }) {
       {others.length > 0 && (
         <div className="space-y-2">
           {others.map((d, i) => (
-            <DiagnosticCard key={i} d={d} />
+            <DiagnosticCard key={i} d={d} onJump={onJump} />
           ))}
         </div>
       )}

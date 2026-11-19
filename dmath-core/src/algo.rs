@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::value::{Edge, GraphOrigin, GraphVal};
+use crate::value::{Edge, GraphOrigin, GraphVal, SetElem};
 
 /// Errors raised by algorithms that can fail on well-typed input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +19,23 @@ pub enum AlgoError {
     NegativeWeight { from: i64, to: i64, weight: i64 },
     /// The graph is not connected, so no spanning tree exists.
     Disconnected,
+}
+
+/// Largest set POWERSET accepts: 2^10 = 1024 subsets keeps the output readable.
+pub const MAX_POWERSET_ELEMS: usize = 10;
+
+/// The power set of `s`: every subset, from the empty set up to `s` itself.
+/// The caller has already checked `s.len() <= MAX_POWERSET_ELEMS`.
+pub fn powerset(s: &BTreeSet<SetElem>) -> BTreeSet<SetElem> {
+    let items: Vec<&SetElem> = s.iter().collect();
+    let n = items.len();
+    (0u32..(1u32 << n))
+        .map(|mask| {
+            SetElem::Set(
+                (0..n).filter(|i| mask & (1 << i) != 0).map(|i| items[i].clone()).collect(),
+            )
+        })
+        .collect()
 }
 
 // ===========================================================================
@@ -1404,4 +1421,220 @@ mod tests {
             assert_eq!(row.iter().sum::<i64>(), 1 << i);
         }
     }
+}
+
+// ===========================================================================
+// Modular arithmetic
+// ===========================================================================
+
+/// Largest exponent-free values stay in i64; products are widened to i128.
+fn to_i64(v: i128) -> Option<i64> {
+    i64::try_from(v).ok()
+}
+
+/// `a mod m` in `0..m` (m > 0).
+pub fn modulo(a: i64, m: i64) -> i64 {
+    a.rem_euclid(m)
+}
+
+/// `base^exp mod m` by square-and-multiply (m > 0, exp ≥ 0).
+pub fn modpow(base: i64, exp: u64, m: i64) -> i64 {
+    let m = m as i128;
+    let mut result: i128 = 1 % m;
+    let mut b = (base as i128).rem_euclid(m);
+    let mut e = exp;
+    while e > 0 {
+        if e & 1 == 1 {
+            result = result * b % m;
+        }
+        b = b * b % m;
+        e >>= 1;
+    }
+    result as i64
+}
+
+/// Extended Euclid: `(g, x, y)` with `a·x + b·y = g = gcd(a, b) ≥ 0`.
+pub fn egcd(a: i64, b: i64) -> (i64, i64, i64) {
+    let (mut r0, mut r1) = (a as i128, b as i128);
+    let (mut x0, mut x1) = (1i128, 0i128);
+    let (mut y0, mut y1) = (0i128, 1i128);
+    while r1 != 0 {
+        let q = r0 / r1;
+        (r0, r1) = (r1, r0 - q * r1);
+        (x0, x1) = (x1, x0 - q * x1);
+        (y0, y1) = (y1, y0 - q * y1);
+    }
+    if r0 < 0 {
+        (r0, x0, y0) = (-r0, -x0, -y0);
+    }
+    (r0 as i64, x0 as i64, y0 as i64)
+}
+
+/// Multiplicative inverse of `a` modulo `m` (m > 1), if gcd(a, m) = 1.
+pub fn modinv(a: i64, m: i64) -> Option<i64> {
+    let (g, x, _) = egcd(modulo(a, m), m);
+    if g != 1 {
+        None
+    } else {
+        Some(modulo(x, m))
+    }
+}
+
+/// Chinese remainder theorem for `x ≡ a1 (mod m1)`, `x ≡ a2 (mod m2)`.
+/// Returns `(x, lcm)` with `0 ≤ x < lcm`. Works when the moduli share a
+/// factor, as long as the two congruences agree on it.
+pub fn crt(a1: i64, m1: i64, a2: i64, m2: i64) -> Result<(i64, i64), String> {
+    let (g, p, _) = egcd(m1, m2);
+    let diff = a2 as i128 - a1 as i128;
+    if diff % g as i128 != 0 {
+        return Err(format!(
+            "x ≡ {} (mod {}) and x ≡ {} (mod {}) contradict each other: {} does not divide {} − {}.",
+            modulo(a1, m1), m1, modulo(a2, m2), m2, g, a2, a1
+        ));
+    }
+    let lcm = to_i64((m1 as i128 / g as i128) * m2 as i128)
+        .ok_or_else(|| "The combined modulus does not fit in a 64-bit number.".to_string())?;
+    let step = (m2 / g) as i128;
+    let t = (diff / g as i128 * p as i128).rem_euclid(step);
+    let x = (a1 as i128 + m1 as i128 * t).rem_euclid(lcm as i128);
+    Ok((x as i64, lcm))
+}
+
+// ===========================================================================
+// More counting
+// ===========================================================================
+
+pub const FIB_MAX_N: i64 = 92;
+pub const CATALAN_MAX_N: i64 = 35;
+pub const DERANGE_MAX_N: i64 = 20;
+pub const STIRLING_MAX_N: i64 = 25;
+
+/// Fibonacci with F(0) = 0, F(1) = 1.
+pub fn fib(n: i64) -> i64 {
+    let (mut a, mut b) = (0i128, 1i128);
+    for _ in 0..n {
+        (a, b) = (b, a + b);
+    }
+    a as i64
+}
+
+/// Catalan number C(n) = C(2n, n) / (n + 1), or `None` on overflow.
+pub fn catalan_checked(n: i64) -> Option<i64> {
+    let mut c: i128 = 1;
+    for k in 0..n as i128 {
+        c = c * 2 * (2 * k + 1) / (k + 2);
+    }
+    to_i64(c)
+}
+
+/// Derangements D(n): permutations with no fixed point. D(n) = (n−1)(D(n−1) + D(n−2)).
+pub fn derange_checked(n: i64) -> Option<i64> {
+    if n == 0 {
+        return Some(1);
+    }
+    let (mut a, mut b) = (1i128, 0i128); // D(0), D(1)
+    for k in 2..=n as i128 {
+        (a, b) = (b, (k - 1) * (a + b));
+    }
+    to_i64(b)
+}
+
+/// Stirling numbers of the second kind S(n, k): ways to split n items into
+/// k non-empty groups. S(n, k) = k·S(n−1, k) + S(n−1, k−1).
+pub fn stirling2_checked(n: i64, k: i64) -> Option<i64> {
+    let (n, k) = (n as usize, k as usize);
+    let mut row = vec![0i128; k + 1];
+    row[0] = 1; // S(0, 0)
+    for i in 1..=n {
+        for j in (0..=k).rev() {
+            let prev = if j > 0 { row[j - 1] } else { 0 };
+            row[j] = if j == 0 { 0 } else { j as i128 * row[j] + prev };
+        }
+        let _ = i;
+    }
+    to_i64(row[k])
+}
+
+// ===========================================================================
+// More graph tools
+// ===========================================================================
+
+/// Topological order of a digraph (Kahn's algorithm, always taking the
+/// smallest available vertex so the result is repeatable). `Err` holds the
+/// vertices that sit on, or behind, a cycle.
+pub fn topo_sort(g: &GraphVal) -> Result<Vec<i64>, Vec<i64>> {
+    let mut indeg: BTreeMap<i64, usize> = g.vertices.iter().map(|&v| (v, 0)).collect();
+    let adj = adjacency(g, false);
+    for e in &g.edges {
+        *indeg.entry(e.to).or_insert(0) += 1;
+    }
+    let mut ready: BTreeSet<i64> = indeg.iter().filter(|(_, &d)| d == 0).map(|(&v, _)| v).collect();
+    let mut order = Vec::new();
+    while let Some(&v) = ready.iter().next() {
+        ready.remove(&v);
+        order.push(v);
+        if let Some(next) = adj.get(&v) {
+            for &w in next {
+                let d = indeg.get_mut(&w).unwrap();
+                *d -= 1;
+                if *d == 0 {
+                    ready.insert(w);
+                }
+            }
+        }
+    }
+    if order.len() == g.vertices.len() {
+        Ok(order)
+    } else {
+        let done: BTreeSet<i64> = order.into_iter().collect();
+        Err(g.vertices.iter().copied().filter(|v| !done.contains(v)).collect())
+    }
+}
+
+/// Connected components (directions ignored): vertex → component number,
+/// numbered 1, 2, … by each component's smallest vertex.
+pub fn components(g: &GraphVal) -> BTreeMap<i64, i64> {
+    let adj = adjacency(g, true);
+    let mut label: BTreeMap<i64, i64> = BTreeMap::new();
+    let mut next = 0i64;
+    for &v in &g.vertices {
+        if label.contains_key(&v) {
+            continue;
+        }
+        next += 1;
+        for u in bfs_adj(&adj, v) {
+            label.insert(u, next);
+        }
+    }
+    label
+}
+
+/// Has an Euler circuit: every edge can be walked exactly once, ending where
+/// it began. Needs all edges in one component and balanced degrees.
+pub fn is_eulerian(g: &GraphVal) -> bool {
+    if g.edges.is_empty() {
+        return true;
+    }
+    let comp = components(g);
+    let first = comp[&g.edges[0].from];
+    if g.edges.iter().any(|e| comp[&e.from] != first) {
+        return false;
+    }
+    if g.directed {
+        let mut balance: BTreeMap<i64, i64> = BTreeMap::new();
+        for e in &g.edges {
+            *balance.entry(e.from).or_insert(0) += 1;
+            *balance.entry(e.to).or_insert(0) -= 1;
+        }
+        balance.values().all(|&b| b == 0)
+    } else {
+        g.vertices.iter().all(|&v| degree(g, v) % 2 == 0)
+    }
+}
+
+/// Vertex degrees, largest first.
+pub fn degree_sequence(g: &GraphVal) -> Vec<i64> {
+    let mut d: Vec<i64> = g.vertices.iter().map(|&v| degree(g, v)).collect();
+    d.sort_unstable_by(|a, b| b.cmp(a));
+    d
 }

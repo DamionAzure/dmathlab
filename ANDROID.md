@@ -33,3 +33,9 @@ If an older copy signed with a different key is installed, uninstall it first.
 
 Needs Android Studio (SDK + NDK), JDK 17 and `NDK_HOME` set:
 `npx tauri android init && npx tauri android build --apk --target aarch64`
+
+## Launch screen
+
+`scripts/android-brand.sh` runs in CI right after `tauri android init`. It gives the app a branded launch
+screen: the Kaylei icon centred on the app's light (`#F4F4F5`) or dark (`#0B0B0C`) background on Android 12+,
+and a plain matching window colour on Android 7–11. Run it yourself after a local `tauri android init`.

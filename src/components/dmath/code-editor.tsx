@@ -7,7 +7,7 @@
 // text and highlight stay in register. The gutter is a third layer synced by
 // scrollTop.
 
-import { useEffect, useMemo, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { tokenizeSource } from "@/lib/dmath/highlight";
 
 interface CodeEditorProps {
@@ -18,7 +18,19 @@ interface CodeEditorProps {
   readOnly?: boolean;
 }
 
-export function CodeEditor({ value, onChange, errorLines, onRun }: CodeEditorProps) {
+/** Methods the page can call on the editor (symbol bar, click-to-jump errors). */
+export interface CodeEditorHandle {
+  /** Insert text at the cursor (replacing any selection); `caretBack` moves the cursor left afterwards. */
+  insert(text: string, caretBack?: number): void;
+  /** Select a 1-based line and scroll it into view. */
+  jumpToLine(line: number): void;
+  focus(): void;
+}
+
+export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(
+  { value, onChange, errorLines, onRun },
+  ref,
+) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -43,10 +55,58 @@ export function CodeEditor({ value, onChange, errorLines, onRun }: CodeEditorPro
     syncScroll();
   }, [value]);
 
+  useImperativeHandle(ref, () => ({
+    insert(text, caretBack = 0) {
+      const ta = taRef.current;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      onChange(value.slice(0, start) + text + value.slice(end));
+      const pos = start + text.length - caretBack;
+      ta.focus();
+      // React re-renders the controlled value first, which resets the caret; set ours after that.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = pos;
+        }),
+      );
+    },
+    jumpToLine(line) {
+      const ta = taRef.current;
+      if (!ta) return;
+      const all = value.split("\n");
+      const idx = Math.min(Math.max(line, 1), all.length) - 1;
+      const start = all.slice(0, idx).reduce((n, l) => n + l.length + 1, 0);
+      ta.focus();
+      ta.setSelectionRange(start, start + all[idx].length);
+      ta.scrollTop = Math.max(0, idx * 20 - ta.clientHeight / 3); // 20px = leading-5
+      syncScroll();
+    },
+    focus() {
+      taRef.current?.focus();
+    },
+  }));
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       onRun();
+      return;
+    }
+    // Ctrl/Cmd + / toggles "# " comments on the selected lines.
+    if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const a = value.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+      let b = value.indexOf("\n", ta.selectionEnd);
+      if (b === -1) b = value.length;
+      const block = value.slice(a, b).split("\n");
+      const allCommented = block.every((l) => l.trim() === "" || /^\s*#/.test(l));
+      const out = block.map((l) =>
+        l.trim() === "" ? l : allCommented ? l.replace(/^(\s*)# ?/, "$1") : l.replace(/^(\s*)/, "$1# "),
+      );
+      onChange(value.slice(0, a) + out.join("\n") + value.slice(b));
+      requestAnimationFrame(() => ta.setSelectionRange(a, a + out.join("\n").length));
       return;
     }
     if (e.key === "Tab") {
@@ -113,10 +173,13 @@ export function CodeEditor({ value, onChange, errorLines, onRun }: CodeEditorPro
           onScroll={syncScroll}
           onKeyDown={handleKeyDown}
           spellCheck={false}
+          autoCapitalize="none"
+          autoCorrect="off"
+          autoComplete="off"
           aria-label="DMath program editor"
           className="absolute inset-0 h-full w-full resize-none overflow-auto whitespace-pre [overflow-wrap:normal] [-webkit-text-size-adjust:100%] bg-transparent px-3 py-3 text-transparent caret-emerald-300 outline-none selection:bg-emerald-400/30"
         />
       </div>
     </div>
   );
-}
+});

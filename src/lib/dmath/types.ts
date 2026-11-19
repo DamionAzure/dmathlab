@@ -12,7 +12,8 @@ export interface DiagnosticJson {
 }
 
 /** Set elements: numbers, or tuples produced by CROSS (nested arrays). */
-export type Elem = number | Elem[];
+// A number, a tuple (array), or a nested set (sent as text such as "{1, 2}").
+export type Elem = number | string | Elem[];
 
 export interface OutputEntry {
   kind: "value";
