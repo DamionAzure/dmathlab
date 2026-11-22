@@ -10,6 +10,7 @@ use crate::ir::{
     HasseIr, Intermediate, OutputEntry, PascalIr, RelationMatrixIr, RelationPropertiesIr, SieveIr,
     TraceStep, TruthTableIr, VennIr, VennRegions, VizIr, CONTRACT_VERSION,
 };
+use crate::explain_more::{explain_more, MoreStep};
 use crate::pretty::{ellipsize, pretty};
 use crate::semantic::{describe_operand, CheckedStmt, SymTable};
 use crate::token::{Builtin, Diagnostic, Pos};
@@ -75,6 +76,9 @@ pub struct Interpreter {
     /// The BFS / DFS / SHORTEST_PATH calls that produced each variable, so
     /// `DISPLAY P` can emit the highlighted traversal view.
     traversals: HashMap<String, Expr>,
+    /// Set operators, POWERSET, SIZE(union), TOPO_SORT and the closures behind
+    /// each variable, so `AS STEPS` can narrate them.
+    more_steps: HashMap<String, MoreStep>,
     universe: Option<BTreeSet<SetElem>>,
     intermediates: Vec<Intermediate>,
 }
@@ -93,6 +97,7 @@ impl Interpreter {
             step_calls: HashMap::new(),
             graph_step_calls: HashMap::new(),
             traversals: HashMap::new(),
+            more_steps: HashMap::new(),
             universe: None,
             intermediates: Vec::new(),
         }
@@ -299,6 +304,14 @@ impl Interpreter {
     fn track_step_call(&mut self, name: &str, expr: &Expr) {
         self.step_calls.remove(name);
         self.graph_step_calls.remove(name);
+        self.more_steps.remove(name);
+        if let Some(ms) = self.capture_more(expr) {
+            self.more_steps.insert(name.to_string(), ms);
+        } else if let Expr::Var { name: src, .. } = expr {
+            if let Some(c) = self.more_steps.get(src).cloned() {
+                self.more_steps.insert(name.to_string(), c);
+            }
+        }
         match expr {
             Expr::Call { func, args, .. } if crate::explain::supports(*func) => {
                 if let Some(vals) = self.eval_args_quietly(args) {
@@ -319,6 +332,78 @@ impl Interpreter {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The set operator / POWERSET / SIZE(union) / TOPO_SORT / closure call in
+    /// `expr`, with its operands evaluated now (no trace entries are kept).
+    fn capture_more(&mut self, expr: &Expr) -> Option<MoreStep> {
+        let mark = self.intermediates.len();
+        let r = self.capture_more_inner(expr);
+        self.intermediates.truncate(mark);
+        r
+    }
+
+    fn capture_more_inner(&mut self, expr: &Expr) -> Option<MoreStep> {
+        fn leaves<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+            match e {
+                Expr::Binary { op: BinOp::Union, lhs, rhs, .. } => {
+                    leaves(lhs, out);
+                    leaves(rhs, out);
+                }
+                other => out.push(other),
+            }
+        }
+        match expr {
+            Expr::Binary { op, lhs, rhs, .. }
+                if matches!(op, BinOp::Union | BinOp::Intersect | BinOp::Difference | BinOp::SymDiff) =>
+            {
+                match (self.eval(lhs, None).ok()?, self.eval(rhs, None).ok()?) {
+                    (Value::Set(a), Value::Set(b)) => Some(MoreStep::SetOp {
+                        op: *op,
+                        a,
+                        b,
+                        a_text: pretty(lhs),
+                        b_text: pretty(rhs),
+                    }),
+                    _ => None,
+                }
+            }
+            Expr::Call { func: Builtin::Powerset, args, .. } => match self.eval(&args[0], None).ok()? {
+                Value::Set(a) if a.len() <= algo::MAX_POWERSET_ELEMS => Some(MoreStep::Power { a }),
+                _ => None,
+            },
+            Expr::Call { func: Builtin::Size, args, .. } => {
+                if !matches!(&args[0], Expr::Binary { op: BinOp::Union, .. }) {
+                    return None;
+                }
+                let mut parts = Vec::new();
+                leaves(&args[0], &mut parts);
+                let mut sets = Vec::new();
+                for p in parts {
+                    match self.eval(p, None).ok()? {
+                        Value::Set(s) => sets.push((pretty(p), s)),
+                        _ => return None,
+                    }
+                }
+                Some(MoreStep::InclExcl { sets })
+            }
+            Expr::Call { func: Builtin::TopoSort, args, .. } => match self.eval(&args[0], None).ok()? {
+                Value::Graph(g) => Some(MoreStep::Topo { g }),
+                _ => None,
+            },
+            Expr::Call {
+                func: func @ (Builtin::TransitiveClosure | Builtin::ReflexiveClosure | Builtin::SymmetricClosure),
+                args,
+                ..
+            } => match self.eval(&args[0], None).ok()? {
+                Value::Set(s) => {
+                    let pairs = relation_pairs(&s, func.name(), "the relation", expr.pos()).ok()?;
+                    Some(MoreStep::Closure { func: *func, pairs })
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -368,6 +453,29 @@ impl Interpreter {
     /// number-theory / combinatorics call behind `G` (direct or via a variable).
     fn exec_steps(&mut self, expr: &Expr) -> IResult<StmtOutcome> {
         let pos = expr.pos();
+        // Set operators, POWERSET, inclusion–exclusion, TOPO_SORT, closures.
+        let more = match expr {
+            Expr::Var { name, .. } => self.more_steps.get(name).cloned(),
+            other => self.capture_more(other),
+        };
+        if let Some(ms) = more {
+            let ir = explain_more(&ms, pretty(expr)).map_err(|m| Diagnostic::error(pos.0, pos.1, m))?;
+            let n = ir.sections.iter().filter(|s| s.agrees.is_some()).count();
+            let summary = format!(
+                "Worked solution for {} ({} method{}{})",
+                ellipsize(&ir.expression, 40),
+                n,
+                if n == 1 { "" } else { "s" },
+                if ir.verified { ", verified" } else { ", DISAGREEMENT — please report" }
+            );
+            return Ok(StmtOutcome {
+                outputs: Vec::new(),
+                visualizations: vec![VizIr::Steps(ir)],
+                warnings: Vec::new(),
+                summary,
+                intermediates: std::mem::take(&mut self.intermediates),
+            });
+        }
         // Graph algorithms (BFS, DFS, SHORTEST_PATH, MST, COLOR, …).
         let graph_call: Option<(Builtin, GraphVal, Vec<i64>, String)> = match expr {
             Expr::Call { func, args, .. } if crate::explain_graph::supports(*func) => {
@@ -427,7 +535,7 @@ impl Interpreter {
                     pos.0,
                     pos.1,
                     format!(
-                        "'STEPS' needs the result of IS_PRIME, FACTORS, DIVISORS, GCD, LCM, TOTIENT, SIEVE, FACT, PERM, COMB, BFS, DFS, SHORTEST_PATH, MST, COLOR, IS_BIPARTITE or IS_CONNECTED, but '{}' is not one.",
+                        "'STEPS' needs the result of IS_PRIME, FACTORS, DIVISORS, GCD, LCM, TOTIENT, SIEVE, FACT, PERM, COMB, BFS, DFS, SHORTEST_PATH, MST, COLOR, IS_BIPARTITE, IS_CONNECTED, TOPO_SORT, a closure, POWERSET, SIZE of a union, or UNION / INTERSECT / DIFFERENCE / SYMDIFF, but '{}' is not one.",
                         pretty(expr)
                     ),
                 )
@@ -841,6 +949,9 @@ impl Interpreter {
         let expression = pretty(expr);
         let what = describe_operand(expr);
         let pos = expr.pos();
+        if let (RelationViz::Matrix, Value::Graph(g)) = (kind, &value) {
+            return Ok(self.graph_adjacency_matrix(g, expression));
+        }
         let s = match &value {
             Value::Set(s) => s,
             other => return Err(defensive_type_error(kind.name(), other, &pos)),
@@ -940,6 +1051,31 @@ impl Interpreter {
             summary,
             intermediates: std::mem::take(&mut self.intermediates),
         })
+    }
+
+    /// Adjacency matrix of a graph: 1 where an edge runs from the row vertex
+    /// to the column vertex (both ways for undirected graphs).
+    fn graph_adjacency_matrix(&mut self, g: &GraphVal, expression: String) -> StmtOutcome {
+        let adj = algo::adjacency(g, false);
+        let vertices: Vec<i64> = g.vertices.iter().copied().collect();
+        let matrix: Vec<Vec<u8>> = vertices
+            .iter()
+            .map(|i| vertices.iter().map(|j| u8::from(adj[i].contains(j))).collect())
+            .collect();
+        let n = vertices.len();
+        let summary = format!(
+            "Generated adjacency matrix for {} ({} × {})",
+            ellipsize(&expression, 40),
+            n,
+            n
+        );
+        StmtOutcome {
+            outputs: Vec::new(),
+            visualizations: vec![VizIr::RelationMatrix(RelationMatrixIr { expression, vertices, matrix })],
+            warnings: Vec::new(),
+            summary,
+            intermediates: std::mem::take(&mut self.intermediates),
+        }
     }
 
     fn exec_graph_view(&mut self, expr: &Expr) -> IResult<StmtOutcome> {
@@ -1461,6 +1597,143 @@ impl Interpreter {
                 }
                 other => return Err(defensive_type_error(func.name(), other, pos)),
             },
+            Builtin::Min | Builtin::Max | Builtin::Sum => {
+                let s = match &vals[0] {
+                    Value::Set(s) => s,
+                    other => return Err(defensive_type_error(func.name(), other, pos)),
+                };
+                let xs = int_elems(s, func.name(), &what0, pos)?;
+                if xs.is_empty() && func != Builtin::Sum {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("{} of an empty set is undefined ('{}' has no elements).", func.name(), what0),
+                    )
+                    .with_hint("Check with IS_EMPTY first, or use SUM (the sum of nothing is 0)."));
+                }
+                match func {
+                    Builtin::Min => (Value::Number(*xs.iter().min().unwrap()), Some("the smallest element".to_string())),
+                    Builtin::Max => (Value::Number(*xs.iter().max().unwrap()), Some("the largest element".to_string())),
+                    _ => {
+                        let mut total: i64 = 0;
+                        for x in &xs {
+                            total = total.checked_add(*x).ok_or_else(|| {
+                                Diagnostic::error(pos.0, pos.1, "Arithmetic overflow: the sum does not fit in a 64-bit integer.")
+                            })?;
+                        }
+                        (Value::Number(total), Some("adds every element once".to_string()))
+                    }
+                }
+            }
+            Builtin::IsEmpty => match &vals[0] {
+                Value::Set(s) => (Value::Bool(s.is_empty()), Some("TRUE when the set has no elements".to_string())),
+                other => return Err(defensive_type_error(func.name(), other, pos)),
+            },
+            Builtin::Domain | Builtin::Range => {
+                let p = self.relation_arg(&vals[0], func.name(), &what0, *pos)?;
+                let set: BTreeSet<SetElem> = p
+                    .iter()
+                    .map(|(a, b)| SetElem::Num(if func == Builtin::Domain { *a } else { *b }))
+                    .collect();
+                let d = if func == Builtin::Domain { "every first component" } else { "every second component" };
+                (Value::Set(set), Some(d.to_string()))
+            }
+            Builtin::Image => {
+                let what1 = describe_operand(&args[1]);
+                let p = self.relation_arg(&vals[0], func.name(), &what0, *pos)?;
+                let xs: BTreeSet<i64> = match &vals[1] {
+                    Value::Set(s) => int_elems(s, func.name(), &what1, pos)?.into_iter().collect(),
+                    other => return Err(defensive_type_error(func.name(), other, pos)),
+                };
+                let set: BTreeSet<SetElem> =
+                    p.iter().filter(|(a, _)| xs.contains(a)).map(|(_, b)| SetElem::Num(*b)).collect();
+                (Value::Set(set), Some("every output reached from the given inputs".to_string()))
+            }
+            Builtin::IsFunction | Builtin::IsInjective | Builtin::IsSurjective | Builtin::IsBijective => {
+                let p = self.relation_arg(&vals[0], func.name(), &what0, *pos)?;
+                let mut by_input: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+                for (a, b) in &p {
+                    by_input.entry(*a).or_default().insert(*b);
+                }
+                let single = by_input.values().all(|v| v.len() == 1);
+                let outs: BTreeSet<i64> = p.iter().map(|(_, b)| *b).collect();
+                let injective = single && outs.len() == by_input.len();
+                let target = |this: &Self, idx: usize| -> IResult<BTreeSet<i64>> {
+                    let _ = this;
+                    let what = describe_operand(&args[idx]);
+                    match &vals[idx] {
+                        Value::Set(s) => Ok(int_elems(s, func.name(), &what, pos)?.into_iter().collect()),
+                        other => Err(defensive_type_error(func.name(), other, pos)),
+                    }
+                };
+                match func {
+                    Builtin::IsFunction => {
+                        let dom = target(self, 1)?;
+                        let keys: BTreeSet<i64> = by_input.keys().copied().collect();
+                        (
+                            Value::Bool(single && keys == dom),
+                            Some("every input in the domain has exactly one output".to_string()),
+                        )
+                    }
+                    Builtin::IsInjective => (
+                        Value::Bool(injective),
+                        Some("a function where no two inputs share an output".to_string()),
+                    ),
+                    Builtin::IsSurjective => {
+                        let cod = target(self, 1)?;
+                        (
+                            Value::Bool(single && outs == cod),
+                            Some("a function whose outputs are exactly the codomain".to_string()),
+                        )
+                    }
+                    _ => {
+                        let cod = target(self, 1)?;
+                        (
+                            Value::Bool(injective && outs == cod),
+                            Some("one-to-one and onto the codomain".to_string()),
+                        )
+                    }
+                }
+            }
+            Builtin::Classes | Builtin::ClassOf => {
+                let p = self.relation_arg(&vals[0], func.name(), &what0, *pos)?;
+                if !algo::is_equivalence(&p) {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!(
+                            "'{}' requires an equivalence relation (reflexive, symmetric and transitive), but '{}' is not one.",
+                            func.name(),
+                            what0
+                        ),
+                    )
+                    .with_hint("Run CHECK PROPERTIES on it to see which property fails."));
+                }
+                let class_of = |x: i64| -> SetElem {
+                    SetElem::Set(
+                        p.iter().filter(|(a, _)| *a == x).map(|(_, b)| SetElem::Num(*b)).collect::<BTreeSet<_>>().into_iter().collect(),
+                    )
+                };
+                if func == Builtin::Classes {
+                    let heads: BTreeSet<i64> = p.iter().map(|(a, _)| *a).collect();
+                    let classes: BTreeSet<SetElem> = heads.into_iter().map(class_of).collect();
+                    (Value::Set(classes), Some("the partition of the relation's elements".to_string()))
+                } else {
+                    let x = self.number_arg(&vals[1], func.name(), &describe_operand(&args[1]), *pos)?;
+                    if !p.iter().any(|(a, _)| *a == x) {
+                        return Err(Diagnostic::error(
+                            pos.0,
+                            pos.1,
+                            format!("{} is not an element of the relation '{}'.", x, what0),
+                        )
+                        .with_hint("Pick a number that appears in one of the pairs."));
+                    }
+                    match class_of(x) {
+                        SetElem::Set(v) => (Value::Set(v.into_iter().collect()), Some(format!("[{}]: everything related to {}", x, x))),
+                        _ => unreachable!(),
+                    }
+                }
+            }
             Builtin::IsDisjoint => match (&vals[0], &vals[1]) {
                 (Value::Set(a), Value::Set(b)) => (
                     Value::Bool(a.is_disjoint(b)),
@@ -1710,6 +1983,200 @@ impl Interpreter {
                     Value::Mapping(algo::components(&g)),
                     Some("vertex → component number (directions ignored)".to_string()),
                 )
+            }
+            Builtin::GraphComplement => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                (
+                    Value::Graph(algo::graph_complement(&g)),
+                    Some("an edge exactly where the original has none".to_string()),
+                )
+            }
+            Builtin::Diameter => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                match algo::diameter(&g) {
+                    Ok(d) => (Value::Number(d), Some("the longest of all shortest paths, counted in edges".to_string())),
+                    Err(why) => {
+                        return Err(Diagnostic::error(
+                            pos.0,
+                            pos.1,
+                            format!("DIAMETER of '{}' is undefined: {}.", what0, why),
+                        )
+                        .with_hint("Use IS_CONNECTED to check, or COMPONENTS to see the pieces."))
+                    }
+                }
+            }
+            Builtin::Bridges | Builtin::CutVertices => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                if g.directed {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("{} works on undirected graphs, but '{}' is directed.", func.name(), what0),
+                    )
+                    .with_hint("Write it as GRAPH {vertices} {edges}."));
+                }
+                if g.vertices.len() + g.edges.len() > algo::MAX_STRUCTURE_SIZE {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("{} supports graphs with at most {} vertices plus edges.", func.name(), algo::MAX_STRUCTURE_SIZE),
+                    ));
+                }
+                if func == Builtin::Bridges {
+                    (
+                        set_from_pairs(algo::bridges(&g).into_iter().collect()),
+                        Some("edges whose removal disconnects part of the graph".to_string()),
+                    )
+                } else {
+                    (
+                        Value::Set(algo::cut_vertices(&g).into_iter().map(SetElem::Num).collect()),
+                        Some("vertices whose removal disconnects part of the graph".to_string()),
+                    )
+                }
+            }
+            Builtin::IsHamiltonian => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                if g.vertices.len() > algo::MAX_HAMILTONIAN_VERTICES {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!(
+                            "IS_HAMILTONIAN searches graphs of at most {} vertices, but '{}' has {}.",
+                            algo::MAX_HAMILTONIAN_VERTICES,
+                            what0,
+                            g.vertices.len()
+                        ),
+                    )
+                    .with_hint("Finding a Hamiltonian cycle is NP-complete, so the search is capped."));
+                }
+                (
+                    Value::Bool(algo::is_hamiltonian(&g)),
+                    Some("a cycle that visits every vertex exactly once (needs 3+ vertices, or 2+ in a digraph)".to_string()),
+                )
+            }
+            Builtin::ChromaticNumber => {
+                let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
+                if let Some(e) = g.edges.iter().find(|e| e.from == e.to) {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("CHROMATIC_NUMBER is undefined: vertex {} has a self-loop, so it can never get a different color from itself.", e.from),
+                    ));
+                }
+                match algo::chromatic_number(&g) {
+                    Some(k) => (
+                        Value::Number(k),
+                        Some("the fewest colors so that no edge joins two equal colors (exact search; COLOR is only greedy)".to_string()),
+                    ),
+                    None => {
+                        return Err(Diagnostic::error(
+                            pos.0,
+                            pos.1,
+                            format!("CHROMATIC_NUMBER gave up on '{}': the exact search is too large.", what0),
+                        )
+                        .with_hint("Use COLOR(G) for a quick (not always smallest) coloring."))
+                    }
+                }
+            }
+            Builtin::Sigma => {
+                let n = self.number_arg(&vals[0], func.name(), &what0, *pos)?;
+                let m = positive_int(n, func.name(), &what0, *pos)?;
+                match algo::sigma(m as i64) {
+                    Some(s) => (Value::Number(s), Some("σ(n): the sum of all positive divisors".to_string())),
+                    None => return Err(Diagnostic::error(pos.0, pos.1, "SIGMA overflows a 64-bit integer for this input.")),
+                }
+            }
+            Builtin::OrderMod => {
+                let a = self.number_arg(&vals[0], func.name(), &what0, *pos)?;
+                let m = self.number_arg(&vals[1], func.name(), &describe_operand(&args[1]), *pos)?;
+                if m < 2 {
+                    return Err(range_error(func.name(), m, "a modulus of at least 2 as", pos));
+                }
+                if algo::gcd(algo::modulo(a, m), m) != 1 {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("ORDER_MOD({}, {}) is undefined: {} and {} share a factor, so {} has no powers equal to 1.", a, m, a, m, a),
+                    )
+                    .with_hint("The multiplicative order needs gcd(a, m) = 1."));
+                }
+                (
+                    Value::Number(algo::mult_order(a, m)),
+                    Some("the least k ≥ 1 with a^k ≡ 1 (mod m); it divides φ(m)".to_string()),
+                )
+            }
+            Builtin::ToBase => {
+                let n = self.number_arg(&vals[0], func.name(), &what0, *pos)?;
+                let b = self.number_arg(&vals[1], func.name(), &describe_operand(&args[1]), *pos)?;
+                if n < 0 {
+                    return Err(range_error(func.name(), n, "non-negative", pos));
+                }
+                if !(2..=36).contains(&b) {
+                    return Err(range_error(func.name(), b, "a base from 2 to 36 as", pos));
+                }
+                (list_value(algo::to_base(n, b)), Some("digits, most significant first; a digit above 9 is shown as its number".to_string()))
+            }
+            Builtin::FromBase => {
+                let b = self.number_arg(&vals[1], func.name(), &describe_operand(&args[1]), *pos)?;
+                if !(2..=36).contains(&b) {
+                    return Err(range_error(func.name(), b, "a base from 2 to 36 as", pos));
+                }
+                let digits: Vec<i64> = match &vals[0] {
+                    Value::List(items) => items
+                        .iter()
+                        .map(|e| match e {
+                            SetElem::Num(n) => Ok(*n),
+                            _ => Err(defensive_type_error(func.name(), &vals[0], pos)),
+                        })
+                        .collect::<IResult<Vec<i64>>>()?,
+                    Value::Number(n) if *n >= 0 => n.to_string().bytes().map(|c| (c - b'0') as i64).collect(),
+                    Value::Number(n) => return Err(range_error(func.name(), *n, "non-negative", pos)),
+                    other => return Err(defensive_type_error(func.name(), other, pos)),
+                };
+                if let Some(bad) = digits.iter().find(|&&d| d < 0 || d >= b) {
+                    return Err(Diagnostic::error(
+                        pos.0,
+                        pos.1,
+                        format!("Digit {} is not valid in base {} (digits run from 0 to {}).", bad, b, b - 1),
+                    )
+                    .with_hint("For bases above 10 pass the digits as a list from TO_BASE."));
+                }
+                match algo::from_base(&digits, b) {
+                    Some(v) => (Value::Number(v), Some("Σ digit · base^position".to_string())),
+                    None => return Err(Diagnostic::error(pos.0, pos.1, "FROM_BASE overflows a 64-bit integer.")),
+                }
+            }
+            Builtin::Partitions | Builtin::Bell => {
+                let n = self.number_arg(&vals[0], func.name(), &what0, *pos)?;
+                if n < 0 {
+                    return Err(range_error(func.name(), n, "non-negative", pos));
+                }
+                let (r, d) = if func == Builtin::Partitions {
+                    (
+                        if n <= 1000 { algo::partitions_checked(n as usize) } else { None },
+                        "p(n): ways to write n as a sum of positive integers, order ignored",
+                    )
+                } else {
+                    (
+                        if n <= 100 { algo::bell_checked(n as usize) } else { None },
+                        "B(n): ways to split n items into non-empty groups",
+                    )
+                };
+                match r {
+                    Some(v) => (Value::Number(v), Some(d.to_string())),
+                    None => {
+                        return Err(Diagnostic::error(
+                            pos.0,
+                            pos.1,
+                            format!("{}({}) does not fit in a 64-bit integer.", func.name(), n),
+                        )
+                        .with_hint(format!(
+                            "{} works up to n = {}.",
+                            func.name(),
+                            if func == Builtin::Partitions { 405 } else { 25 }
+                        )))
+                    }
+                }
             }
             Builtin::IsEulerian => {
                 let g = self.graph_arg(&vals[0], func.name(), &what0, *pos)?;
@@ -2100,7 +2567,9 @@ impl Interpreter {
                         (other, _) => Err(defensive_type_error("COMPLEMENT", other, pos)),
                     },
                     UnOp::Neg => match v {
-                        Value::Number(n) => Ok(Value::Number(-n)),
+                        Value::Number(n) => n.checked_neg().map(Value::Number).ok_or_else(|| {
+                            Diagnostic::error(pos.0, pos.1, "Arithmetic overflow: the negation does not fit in a 64-bit integer.")
+                        }),
                         other => Err(defensive_type_error("-", &other, pos)),
                     },
                 }
@@ -2181,29 +2650,50 @@ impl Interpreter {
                         )),
                     });
                     Ok(Value::Set(result))
-                } else {
-                    // Subset / Equals
-                    let (ls, rs) = match (&lv, &rv) {
-                        (Value::Set(a), Value::Set(b)) => (a, b),
+                } else if op.is_arith() {
+                    let (a, b) = match (&lv, &rv) {
+                        (Value::Number(a), Value::Number(b)) => (*a, *b),
                         _ => {
-                            let bad = if !matches!(lv, Value::Set(_)) { &lv } else { &rv };
+                            let bad = if !matches!(lv, Value::Number(_)) { &lv } else { &rv };
                             return Err(defensive_type_error(op.symbol(), bad, pos));
                         }
                     };
-                    let result = match op {
-                        BinOp::Subset => ls.is_subset(rs),
-                        BinOp::Equals => ls == rs,
-                        _ => unreachable!(),
+                    let result = arith(*op, a, b, pos)?;
+                    self.record(Intermediate {
+                        expr: pretty(e),
+                        result: result.to_string(),
+                        detail: Some(format!("{} {} {}", a, op.symbol(), b)),
+                    });
+                    Ok(Value::Number(result))
+                } else {
+                    // Comparisons: SUBSET, PSUBSET, EQUALS, IN, <, >, <=, >=, ==, !=
+                    let result = match (op, &lv, &rv) {
+                        (BinOp::Subset, Value::Set(a), Value::Set(b)) => a.is_subset(b),
+                        (BinOp::PSubset, Value::Set(a), Value::Set(b)) => {
+                            a.len() < b.len() && a.is_subset(b)
+                        }
+                        (BinOp::Equals, Value::Set(a), Value::Set(b)) => a == b,
+                        (BinOp::In, Value::Number(n), Value::Set(s)) => s.contains(&SetElem::Num(*n)),
+                        (BinOp::In, Value::Set(x), Value::Set(s)) => {
+                            s.contains(&SetElem::Set(x.iter().cloned().collect()))
+                        }
+                        (BinOp::Lt, Value::Number(a), Value::Number(b)) => a < b,
+                        (BinOp::Gt, Value::Number(a), Value::Number(b)) => a > b,
+                        (BinOp::Le, Value::Number(a), Value::Number(b)) => a <= b,
+                        (BinOp::Ge, Value::Number(a), Value::Number(b)) => a >= b,
+                        (BinOp::Eq, Value::Number(a), Value::Number(b)) => a == b,
+                        (BinOp::Ne, Value::Number(a), Value::Number(b)) => a != b,
+                        (BinOp::Eq, Value::Set(a), Value::Set(b)) => a == b,
+                        (BinOp::Ne, Value::Set(a), Value::Set(b)) => a != b,
+                        _ => {
+                            let bad = if matches!(lv, Value::Bool(_) | Value::Graph(_)) { &lv } else { &rv };
+                            return Err(defensive_type_error(op.symbol(), bad, pos));
+                        }
                     };
                     self.record(Intermediate {
                         expr: pretty(e),
                         result: if result { "TRUE" } else { "FALSE" }.to_string(),
-                        detail: Some(format!(
-                            "{} {} {}",
-                            set_to_string(ls),
-                            op.symbol(),
-                            set_to_string(rs)
-                        )),
+                        detail: Some(format!("{} {} {}", lv.display(), op.symbol(), rv.display())),
                     });
                     Ok(Value::Bool(result))
                 }
@@ -2239,6 +2729,82 @@ fn item_to_elem(i: &SetItem) -> SetElem {
             SetElem::Set(s.into_iter().collect())
         }
     }
+}
+
+/// Checked integer arithmetic with floor division / modulo (Python semantics).
+fn arith(op: BinOp, a: i64, b: i64, pos: &Pos) -> IResult<i64> {
+    let overflow = || {
+        Diagnostic::error(
+            pos.0,
+            pos.1,
+            format!("Arithmetic overflow: {} {} {} does not fit in a 64-bit integer.", a, op.symbol(), b),
+        )
+        .with_hint("Results must stay between -9223372036854775808 and 9223372036854775807.")
+    };
+    match op {
+        BinOp::Add => a.checked_add(b).ok_or_else(overflow),
+        BinOp::Sub => a.checked_sub(b).ok_or_else(overflow),
+        BinOp::Mul => a.checked_mul(b).ok_or_else(overflow),
+        BinOp::Div | BinOp::Rem => {
+            if b == 0 {
+                return Err(Diagnostic::error(
+                    pos.0,
+                    pos.1,
+                    format!("Division by zero: {} {} 0.", a, op.symbol()),
+                )
+                .with_hint("The right-hand side of / and % must not be 0."));
+            }
+            let q = a.checked_div(b).ok_or_else(overflow)?;
+            let r = a.checked_rem(b).ok_or_else(overflow)?;
+            let adjust = r != 0 && ((r < 0) != (b < 0));
+            if op == BinOp::Div {
+                if adjust { q.checked_sub(1).ok_or_else(overflow) } else { Ok(q) }
+            } else if adjust {
+                Ok(r + b)
+            } else {
+                Ok(r)
+            }
+        }
+        BinOp::Pow => {
+            if b < 0 {
+                return Err(Diagnostic::error(
+                    pos.0,
+                    pos.1,
+                    format!("Negative exponent: {} ^ {} is not an integer.", a, b),
+                )
+                .with_hint("Exponents must be 0 or greater."));
+            }
+            match a {
+                0 => Ok(if b == 0 { 1 } else { 0 }),
+                1 => Ok(1),
+                -1 => Ok(if b % 2 == 0 { 1 } else { -1 }),
+                _ => {
+                    let e = u32::try_from(b).map_err(|_| overflow())?;
+                    a.checked_pow(e).ok_or_else(overflow)
+                }
+            }
+        }
+        _ => unreachable!("not an arithmetic operator"),
+    }
+}
+
+/// The numbers of a set, or an error naming the function when it holds pairs or sets.
+fn int_elems(s: &BTreeSet<SetElem>, who: &str, what: &str, pos: &Pos) -> IResult<Vec<i64>> {
+    let mut out = Vec::with_capacity(s.len());
+    for e in s {
+        match e {
+            SetElem::Num(n) => out.push(*n),
+            _ => {
+                return Err(Diagnostic::error(
+                    pos.0,
+                    pos.1,
+                    format!("'{}' needs a set of plain numbers, but '{}' contains other elements.", who, what),
+                )
+                .with_hint("Use a set like {3, 1, 4}."))
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn defensive_type_error(op: &str, got: &Value, pos: &Pos) -> Diagnostic {
@@ -2510,6 +3076,20 @@ fn op_label(op: &BinOp) -> &'static str {
         BinOp::Nor => "Not-or",
         BinOp::Subset => "Subset",
         BinOp::Equals => "Equality",
+        BinOp::PSubset => "Proper subset",
+        BinOp::In => "Membership",
+        BinOp::Add => "Addition",
+        BinOp::Sub => "Subtraction",
+        BinOp::Mul => "Multiplication",
+        BinOp::Div => "Floor division",
+        BinOp::Rem => "Remainder",
+        BinOp::Pow => "Power",
+        BinOp::Lt => "Less than",
+        BinOp::Gt => "Greater than",
+        BinOp::Le => "At most",
+        BinOp::Ge => "At least",
+        BinOp::Eq => "Equal to",
+        BinOp::Ne => "Not equal to",
     }
 }
 

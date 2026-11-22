@@ -9,6 +9,8 @@ use crate::ast::{BinOp, Expr, GraphEdgeLit, Program, SetItem, Stmt, UnOp, VizKin
 use crate::token::{describe, Builtin, Diagnostic, Pos, TokKind, Token};
 
 const MAX_EXPR_DEPTH: usize = 64;
+/// Largest number of elements a range literal such as `{1..10000}` may expand to.
+const MAX_RANGE_LEN: usize = 10_000;
 
 pub fn parse(tokens: Vec<Token>) -> (Program, Vec<Diagnostic>) {
     let mut p = Parser { toks: tokens, i: 0, depth: 0, diags: Vec::new() };
@@ -310,9 +312,21 @@ impl Parser {
 
     fn parse_compare(&mut self) -> PResult<Expr> {
         let lhs = self.parse_set_union()?;
-        if self.at(TokKind::Subset) || self.at(TokKind::Equals) {
+        let cmp = match self.peek().kind {
+            TokKind::Subset => Some(BinOp::Subset),
+            TokKind::PSubset => Some(BinOp::PSubset),
+            TokKind::Equals => Some(BinOp::Equals),
+            TokKind::In => Some(BinOp::In),
+            TokKind::Lt => Some(BinOp::Lt),
+            TokKind::Gt => Some(BinOp::Gt),
+            TokKind::Le => Some(BinOp::Le),
+            TokKind::Ge => Some(BinOp::Ge),
+            TokKind::EqEq => Some(BinOp::Eq),
+            TokKind::Ne => Some(BinOp::Ne),
+            _ => None,
+        };
+        if let Some(op) = cmp {
             let op_tok = self.advance();
-            let op = if op_tok.kind == TokKind::Subset { BinOp::Subset } else { BinOp::Equals };
             let rhs = self.parse_set_union()?;
             return Ok(Expr::Binary {
                 op,
@@ -360,10 +374,10 @@ impl Parser {
     }
 
     fn parse_set_cross(&mut self) -> PResult<Expr> {
-        let mut lhs = self.parse_complement()?;
+        let mut lhs = self.parse_add()?;
         while self.at(TokKind::Cross) {
             let op_tok = self.advance();
-            let rhs = self.parse_complement()?;
+            let rhs = self.parse_add()?;
             lhs = Expr::Binary {
                 op: BinOp::Cross,
                 lhs: Box::new(lhs),
@@ -372,6 +386,74 @@ impl Parser {
             };
         }
         Ok(lhs)
+    }
+
+    fn parse_add(&mut self) -> PResult<Expr> {
+        let mut lhs = self.parse_mul()?;
+        while self.at(TokKind::Plus) || self.at(TokKind::Minus) {
+            let op_tok = self.advance();
+            let op = if op_tok.kind == TokKind::Plus { BinOp::Add } else { BinOp::Sub };
+            let rhs = self.parse_mul()?;
+            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs), pos: op_tok.pos() };
+        }
+        Ok(lhs)
+    }
+
+    fn parse_mul(&mut self) -> PResult<Expr> {
+        let mut lhs = self.parse_neg()?;
+        loop {
+            let op = match self.peek().kind {
+                TokKind::Star => BinOp::Mul,
+                TokKind::Slash => BinOp::Div,
+                TokKind::Percent => BinOp::Rem,
+                _ => break,
+            };
+            let op_tok = self.advance();
+            let rhs = self.parse_neg()?;
+            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs), pos: op_tok.pos() };
+        }
+        Ok(lhs)
+    }
+
+    /// Unary minus: looser than `^` (so `-2 ^ 2` is `-(2 ^ 2)`), tighter than `*`.
+    fn parse_neg(&mut self) -> PResult<Expr> {
+        if self.at(TokKind::Minus) {
+            let t = self.advance();
+            self.depth += 1;
+            if self.depth > MAX_EXPR_DEPTH {
+                return Err(Diagnostic::error(
+                    t.line,
+                    t.col,
+                    format!("Expression is nested too deeply (limit is {} levels).", MAX_EXPR_DEPTH),
+                ));
+            }
+            let arg = self.parse_neg();
+            self.depth -= 1;
+            let arg = arg?;
+            // Fold a plain literal so `-3` stays the number -3.
+            if let Expr::Num { v, .. } = &arg {
+                if let Some(n) = v.checked_neg() {
+                    return Ok(Expr::Num { v: n, pos: t.pos() });
+                }
+            }
+            return Ok(Expr::Unary { op: UnOp::Neg, arg: Box::new(arg), pos: t.pos() });
+        }
+        self.parse_pow()
+    }
+
+    fn parse_pow(&mut self) -> PResult<Expr> {
+        let base = self.parse_complement()?;
+        if self.at(TokKind::Caret) {
+            let op_tok = self.advance();
+            let rhs = self.parse_neg()?; // right associative
+            return Ok(Expr::Binary {
+                op: BinOp::Pow,
+                lhs: Box::new(base),
+                rhs: Box::new(rhs),
+                pos: op_tok.pos(),
+            });
+        }
+        Ok(base)
     }
 
     fn parse_complement(&mut self) -> PResult<Expr> {
@@ -391,28 +473,6 @@ impl Parser {
                 let v: i64 = t.text.parse().map_err(|_| {
                     Diagnostic::error(t.line, t.col, format!("Invalid number '{}'.", t.text))
                 })?;
-                Ok(Expr::Num { v, pos: t.pos() })
-            }
-            TokKind::Minus => {
-                self.advance();
-                let n = self.peek().clone();
-                if n.kind != TokKind::Number {
-                    return Err(Diagnostic::error(
-                        n.line,
-                        n.col,
-                        "Expected a number after '-'.",
-                    )
-                    .with_hint("Unary minus is only supported for numeric literals, e.g. {1, -2}."));
-                }
-                self.advance();
-                let v: i64 = n
-                    .text
-                    .parse::<i64>()
-                    .ok()
-                    .and_then(|x| x.checked_neg())
-                    .ok_or_else(|| {
-                        Diagnostic::error(n.line, n.col, "Number literal is too large.")
-                    })?;
                 Ok(Expr::Num { v, pos: t.pos() })
             }
             TokKind::True => {
@@ -459,17 +519,18 @@ impl Parser {
                     return Ok(Expr::SetLit { items, pos: t.pos() });
                 }
                 loop {
-                    let item = self.parse_set_item()?;
-                    let key = set_item_key(&item);
-                    if seen.insert(key.clone()) {
-                        items.push(item);
-                    } else {
-                        let (wline, wcol) = item.pos();
-                        self.diags.push(Diagnostic::warning(
-                            wline,
-                            wcol,
-                            format!("Duplicate element {} in set literal is ignored.", key),
-                        ));
+                    for item in self.parse_set_items()? {
+                        let key = set_item_key(&item);
+                        if seen.insert(key.clone()) {
+                            items.push(item);
+                        } else {
+                            let (wline, wcol) = item.pos();
+                            self.diags.push(Diagnostic::warning(
+                                wline,
+                                wcol,
+                                format!("Duplicate element {} in set literal is ignored.", key),
+                            ));
+                        }
                     }
                     if self.at(TokKind::Comma) {
                         self.advance();
@@ -529,6 +590,37 @@ impl Parser {
         Ok((v, n.pos()))
     }
 
+    /// One slot of a set literal: an element, or a range `a..b` that expands
+    /// to every integer from `a` to `b`.
+    fn parse_set_items(&mut self) -> PResult<Vec<SetItem>> {
+        if self.at(TokKind::LParen) || self.at(TokKind::LBrace) {
+            return Ok(vec![self.parse_set_item()?]);
+        }
+        let (a, pos) = self.parse_signed_number("the set literal")?;
+        if !self.at(TokKind::DotDot) {
+            return Ok(vec![SetItem::Num { v: a, pos }]);
+        }
+        let dd = self.advance();
+        let (b, _) = self.parse_signed_number("the range")?;
+        if b < a {
+            return Err(Diagnostic::error(
+                dd.line,
+                dd.col,
+                format!("Range {}..{} is empty: the start is larger than the end.", a, b),
+            )
+            .with_hint("Write the smaller number first, e.g. {1..5}."));
+        }
+        let count = (b as i128) - (a as i128) + 1;
+        if count > MAX_RANGE_LEN as i128 {
+            return Err(Diagnostic::error(
+                dd.line,
+                dd.col,
+                format!("Range {}..{} would contain {} elements; the limit is {}.", a, b, count, MAX_RANGE_LEN),
+            ));
+        }
+        Ok((a..=b).map(|v| SetItem::Num { v, pos }).collect())
+    }
+
     /// One element of a set literal: a number, a tuple `(1, 2)` or a nested set `{1, 2}`.
     fn parse_set_item(&mut self) -> PResult<SetItem> {
         if self.at(TokKind::LParen) {
@@ -552,7 +644,7 @@ impl Parser {
                 return Ok(SetItem::Set { items, pos: lb.pos() });
             }
             loop {
-                items.push(self.parse_set_item()?);
+                items.extend(self.parse_set_items()?);
                 if self.at(TokKind::Comma) {
                     self.advance();
                     self.skip_newlines();

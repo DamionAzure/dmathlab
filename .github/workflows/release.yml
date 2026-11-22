@@ -2,7 +2,7 @@
 # Android APK, attach everything to a draft GitHub Release, then publish it
 # only if every build succeeded.
 #
-# Trigger it by pushing a tag (git tag v0.3.0 && git push --tags) or from the
+# Trigger it by pushing a tag (git tag v0.5.0 && git push --tags) or from the
 # Actions tab ("Run workflow"). The version comes from src-tauri/tauri.conf.json.
 name: Release
 
@@ -135,6 +135,7 @@ jobs:
         run: |
           npx tauri android init --ci
           bash scripts/android-brand.sh
+          bash scripts/android-insets.sh
       - name: Build release APK (arm64 + armv7)
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"

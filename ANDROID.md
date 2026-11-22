@@ -39,3 +39,7 @@ Needs Android Studio (SDK + NDK), JDK 17 and `NDK_HOME` set:
 `scripts/android-brand.sh` runs in CI right after `tauri android init`. It gives the app a branded launch
 screen: the Kaylei icon centred on the app's light (`#F4F4F5`) or dark (`#0B0B0C`) background on Android 12+,
 and a plain matching window colour on Android 7–11. Run it yourself after a local `tauri android init`.
+
+## Status bar and gesture bar
+
+`scripts/android-insets.sh` runs in CI after `tauri android init`. It patches the generated `MainActivity.kt` so the app is laid out inside the system bars (clock, battery and notification icons on top, gesture bar below), with icon colour following light or dark mode.

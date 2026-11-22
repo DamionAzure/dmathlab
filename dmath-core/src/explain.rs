@@ -22,6 +22,8 @@ pub(crate) enum Val {
     Num(i64),
     Bool(bool),
     List(Vec<i64>),
+    /// A set, already formatted (used by the set / relation walk-throughs).
+    Text(String),
 }
 
 impl Val {
@@ -30,6 +32,7 @@ impl Val {
         match self {
             Val::Num(n) => n.to_string(),
             Val::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+            Val::Text(t) => t.clone(),
             Val::List(v) => format!("[{}]", v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")),
         }
     }

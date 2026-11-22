@@ -5,8 +5,9 @@
 
 use crate::ast::{BinOp, Expr, GraphEdgeLit, SetItem, UnOp};
 
-const ATOM_PREC: u8 = 12;
-const UNARY_PREC: u8 = 11; // NOT / COMPLEMENT bind tighter than any binary operator
+const ATOM_PREC: u8 = 15;
+const UNARY_PREC: u8 = 14; // NOT / COMPLEMENT bind tighter than any binary operator
+const NEG_PREC: u8 = 12; // unary minus: tighter than * and /, looser than ^
 
 pub fn pretty(e: &Expr) -> String {
     go(e, 0)
@@ -14,7 +15,14 @@ pub fn pretty(e: &Expr) -> String {
 
 fn go(e: &Expr, min_prec: u8) -> String {
     match e {
-        Expr::Num { v, .. } => v.to_string(),
+        Expr::Num { v, .. } => {
+            // A negative literal as the base of `^` must keep its parentheses.
+            if *v < 0 && min_prec > NEG_PREC && min_prec < ATOM_PREC {
+                format!("({})", v)
+            } else {
+                v.to_string()
+            }
+        }
         Expr::Bool { v, .. } => if *v { "TRUE" } else { "FALSE" }.to_string(),
         Expr::Var { name, .. } => name.clone(),
         Expr::SetLit { items, .. } => {
@@ -40,7 +48,8 @@ fn go(e: &Expr, min_prec: u8) -> String {
             format!("{}({})", func.name(), inner.join(", "))
         }
         Expr::Unary { op, arg, .. } => {
-            let inner = go(arg, UNARY_PREC);
+            let own = if *op == UnOp::Neg { NEG_PREC } else { UNARY_PREC };
+            let inner = go(arg, own);
             let s = match op {
                 UnOp::Neg => format!("-{}", inner),
                 _ => format!("{} {}", op.symbol(), inner),
@@ -49,7 +58,7 @@ fn go(e: &Expr, min_prec: u8) -> String {
             // when it appears as an operand of a set operator that expects an
             // atom-ish operand (e.g. `{1} CROSS (COMPLEMENT A)` reads better
             // parenthesized); the precedence numbers handle this uniformly.
-            if UNARY_PREC < min_prec {
+            if own < min_prec {
                 format!("({})", s)
             } else {
                 s
@@ -57,7 +66,13 @@ fn go(e: &Expr, min_prec: u8) -> String {
         }
         Expr::Binary { op, lhs, rhs, .. } => {
             let p = op.precedence();
-            let (lmin, rmin) = if op.right_assoc() { (p + 1, p) } else { (p, p + 1) };
+            let (lmin, rmin) = if op.is_comparison() {
+                (p + 1, p + 1)
+            } else if op.right_assoc() {
+                (p + 1, p)
+            } else {
+                (p, p + 1)
+            };
             let l = go(lhs, lmin);
             let r = go(rhs, rmin);
             let s = format!("{} {} {}", l, op.symbol(), r);

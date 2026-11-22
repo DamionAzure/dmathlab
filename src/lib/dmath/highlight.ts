@@ -8,7 +8,7 @@ export interface Token {
 }
 
 const LOGIC_OPS = new Set(["AND", "OR", "NOT", "XOR", "NAND", "NOR", "IMPLIES", "IFF"]);
-const SET_OPS = new Set(["UNION", "INTERSECT", "SYMDIFF", "DIFFERENCE", "COMPLEMENT", "CROSS", "SUBSET", "EQUALS"]);
+const SET_OPS = new Set(["UNION", "INTERSECT", "SYMDIFF", "DIFFERENCE", "COMPLEMENT", "CROSS", "SUBSET", "PSUBSET", "IN", "EQUALS"]);
 const STMT_KW = new Set([
   "DISPLAY",
   "VISUALIZE",
@@ -81,6 +81,31 @@ const BUILTIN_FN = new Set([
   "POWERSET",
   "CONTAINS",
   "IS_DISJOINT",
+  "MIN",
+  "MAX",
+  "SUM",
+  "IS_EMPTY",
+  "DOMAIN",
+  "RANGE",
+  "IMAGE",
+  "IS_FUNCTION",
+  "IS_INJECTIVE",
+  "IS_SURJECTIVE",
+  "IS_BIJECTIVE",
+  "CLASSES",
+  "CLASS_OF",
+  "GRAPH_COMPLEMENT",
+  "DIAMETER",
+  "BRIDGES",
+  "CUT_VERTICES",
+  "IS_HAMILTONIAN",
+  "CHROMATIC_NUMBER",
+  "SIGMA",
+  "ORDER_MOD",
+  "TO_BASE",
+  "FROM_BASE",
+  "PARTITIONS",
+  "BELL",
 ]);
 const LITERALS = new Set(["TRUE", "FALSE"]);
 

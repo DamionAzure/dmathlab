@@ -126,6 +126,15 @@ pub fn check_statement(
                     })
                 }
                 VizKind::Digraph | VizKind::Hasse | VizKind::Matrix => {
+                    // MATRIX also draws a graph's adjacency matrix.
+                    if *kind == VizKind::Matrix && dtype == DType::Graph {
+                        return Ok(CheckedStmt::Visualize {
+                            expr: expr.clone(),
+                            dtype,
+                            kind: *kind,
+                            free_bool_vars: Vec::new(),
+                        });
+                    }
                     if dtype != DType::Set {
                         return Err(Diagnostic::error(
                             pos.0,
@@ -324,6 +333,8 @@ pub enum Param {
     SetAny,
     /// A number or a set, used where either can be an element of a set.
     Element,
+    /// A list of digits (from TO_BASE) or a number whose decimal digits are read.
+    Digits,
     Graph,
     Number,
 }
@@ -334,6 +345,7 @@ impl Param {
             Param::Relation => "relation",
             Param::SetAny => "set",
             Param::Element => "element",
+            Param::Digits => "digits",
             Param::Graph => "Graph",
             Param::Number => "vertex",
         }
@@ -347,6 +359,9 @@ pub fn builtin_signature(f: Builtin) -> (&'static [Param], DType) {
     const S: &[Param] = &[Param::SetAny];
     const SS: &[Param] = &[Param::SetAny, Param::SetAny];
     const SE: &[Param] = &[Param::SetAny, Param::Element];
+    const RS: &[Param] = &[Param::Relation, Param::SetAny];
+    const RN: &[Param] = &[Param::Relation, Param::Number];
+    const DN: &[Param] = &[Param::Digits, Param::Number];
     const G: &[Param] = &[Param::Graph];
     const GN: &[Param] = &[Param::Graph, Param::Number];
     const GNN: &[Param] = &[Param::Graph, Param::Number, Param::Number];
@@ -409,6 +424,22 @@ pub fn builtin_signature(f: Builtin) -> (&'static [Param], DType) {
         Builtin::Components => (G, DType::Mapping),
         Builtin::IsEulerian => (G, DType::Bool),
         Builtin::DegreeSequence => (G, DType::List),
+        Builtin::Min | Builtin::Max | Builtin::Sum => (S, DType::Number),
+        Builtin::IsEmpty => (S, DType::Bool),
+        Builtin::Domain | Builtin::Range => (R, DType::Set),
+        Builtin::Image => (RS, DType::Set),
+        Builtin::IsFunction | Builtin::IsSurjective | Builtin::IsBijective => (RS, DType::Bool),
+        Builtin::IsInjective => (R, DType::Bool),
+        Builtin::Classes => (R, DType::Set),
+        Builtin::ClassOf => (RN, DType::Set),
+        Builtin::GraphComplement => (G, DType::Graph),
+        Builtin::Diameter | Builtin::ChromaticNumber => (G, DType::Number),
+        Builtin::Bridges | Builtin::CutVertices => (G, DType::Set),
+        Builtin::IsHamiltonian => (G, DType::Bool),
+        Builtin::Sigma | Builtin::Partitions | Builtin::Bell => (N, DType::Number),
+        Builtin::OrderMod => (NN, DType::Number),
+        Builtin::ToBase => (NN, DType::List),
+        Builtin::FromBase => (DN, DType::Number),
     }
 }
 
@@ -434,6 +465,14 @@ pub fn builtin_usage(f: Builtin) -> String {
         Builtin::ModInv => vec!["a".into(), "m".into()],
         Builtin::Egcd => vec!["a".into(), "b".into()],
         Builtin::Contains => vec!["set".into(), "element".into()],
+        Builtin::Image => vec!["relation".into(), "input set".into()],
+        Builtin::IsFunction => vec!["relation".into(), "domain set".into()],
+        Builtin::IsSurjective | Builtin::IsBijective => vec!["relation".into(), "codomain set".into()],
+        Builtin::ClassOf => vec!["equivalence relation".into(), "element".into()],
+        Builtin::Sigma | Builtin::Partitions | Builtin::Bell => vec!["non-negative integer n".into()],
+        Builtin::OrderMod => vec!["a".into(), "m".into()],
+        Builtin::ToBase => vec!["n".into(), "base (2 to 36)".into()],
+        Builtin::FromBase => vec!["digits".into(), "base (2 to 36)".into()],
         Builtin::Crt => vec!["a1".into(), "m1".into(), "a2".into(), "m2".into()],
         Builtin::Stirling2 => vec!["n".into(), "k".into()],
         _ => params.iter().map(|p| p.name().to_string()).collect(),
@@ -535,6 +574,7 @@ pub fn infer(e: &Expr, types: &SymTable) -> Result<DType, Diagnostic> {
                 let ok = match want {
                     Param::Relation | Param::SetAny => t == DType::Set,
                     Param::Element => t == DType::Set || t == DType::Number,
+                    Param::Digits => t == DType::List || t == DType::Number,
                     Param::Graph => t == DType::Graph,
                     Param::Number => t == DType::Number,
                 };
@@ -548,6 +588,15 @@ pub fn infer(e: &Expr, types: &SymTable) -> Result<DType, Diagnostic> {
                                 t.name()
                             ),
                             "Build a relation like R = {(1, 2), (2, 3)} or with A CROSS B.".to_string(),
+                        ),
+                        Param::Digits => (
+                            format!(
+                                "'{}' needs a list of digits (from TO_BASE) or a number, but '{}' has type {}.",
+                                func.name(),
+                                describe_operand(arg),
+                                t.name()
+                            ),
+                            format!("Usage: {}.", builtin_usage(*func)),
                         ),
                         Param::Element => (
                             format!(
@@ -632,12 +681,25 @@ pub fn infer(e: &Expr, types: &SymTable) -> Result<DType, Diagnostic> {
         }
         Expr::Binary { op, lhs, rhs, pos } => {
             let lt = infer(lhs, types)?;
-            if mismatch(*op, lt) {
+            if mismatch(*op, lt, false) {
                 return Err(type_error_binary(*op, lhs, lt, pos.0, pos.1));
             }
             let rt = infer(rhs, types)?;
-            if mismatch(*op, rt) {
+            if mismatch(*op, rt, true) {
                 return Err(type_error_binary(*op, rhs, rt, pos.0, pos.1));
+            }
+            if matches!(op, BinOp::Eq | BinOp::Ne) && lt != rt {
+                return Err(Diagnostic::error(
+                    pos.0,
+                    pos.1,
+                    format!(
+                        "Type error: '{}' compares two values of the same type, but got {} and {}.",
+                        op.symbol(),
+                        lt.name(),
+                        rt.name()
+                    ),
+                )
+                .with_hint("Compare two numbers or two sets; use IN to test membership."));
             }
             Ok(result_type(*op))
         }
@@ -652,19 +714,27 @@ fn set_item_kind(item: &SetItem) -> u8 {
     }
 }
 
-fn mismatch(op: BinOp, t: DType) -> bool {
+fn mismatch(op: BinOp, t: DType, rhs_side: bool) -> bool {
     if op.is_logic() {
         t != DType::Bool
     } else if op.is_set_op() {
         t != DType::Set
+    } else if op.is_arith() || op.is_ordering() {
+        t != DType::Number
+    } else if matches!(op, BinOp::Eq | BinOp::Ne) {
+        t != DType::Number && t != DType::Set
+    } else if op == BinOp::In && !rhs_side {
+        t != DType::Number && t != DType::Set
     } else {
-        // Subset / Equals
+        // Subset / PSubset / Equals / IN (right side)
         t != DType::Set
     }
 }
 
 fn result_type(op: BinOp) -> DType {
-    if op.is_comparison() {
+    if op.is_arith() {
+        DType::Number
+    } else if op.is_comparison() {
         DType::Bool
     } else if op.is_set_op() {
         DType::Set
@@ -694,7 +764,15 @@ fn type_error_binary(
         format!(
             "Type error: '{}' requires {} operands, but '{}' has type {}.",
             op.symbol(),
-            if op.is_set_op() || op.is_comparison() { "set" } else { "Boolean" },
+            if op.is_arith() || op.is_ordering() {
+                "Number"
+            } else if matches!(op, BinOp::Eq | BinOp::Ne) {
+                "Number or set"
+            } else if op.is_set_op() || op.is_comparison() {
+                "set"
+            } else {
+                "Boolean"
+            },
             what,
             got.name()
         ),
@@ -707,7 +785,7 @@ fn type_error_binary(
             op.symbol()
         ));
     }
-    if op.is_comparison() && got == DType::Bool {
+    if op.is_comparison() && !op.is_ordering() && !matches!(op, BinOp::Eq | BinOp::Ne) && got == DType::Bool {
         d = d.with_hint(format!(
             "For propositions use IFF (or CHECK EQUIVALENT) instead of '{}'.",
             op.symbol()

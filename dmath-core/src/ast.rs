@@ -37,7 +37,24 @@ pub enum BinOp {
     Cross,
     // Set comparisons (yield Boolean)
     Subset,
+    PSubset,
     Equals,
+    /// Membership: `3 IN A` or `{1} IN POWERSET(A)`.
+    In,
+    // Integer arithmetic (yield Number)
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+    Pow,
+    // Numeric comparisons (yield Boolean); `Eq`/`Ne` also accept two sets
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    Eq,
+    Ne,
 }
 
 impl BinOp {
@@ -57,13 +74,36 @@ impl BinOp {
             BinOp::Cross => "CROSS",
             BinOp::Subset => "SUBSET",
             BinOp::Equals => "EQUALS",
+            BinOp::PSubset => "PSUBSET",
+            BinOp::In => "IN",
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+            BinOp::Rem => "%",
+            BinOp::Pow => "^",
+            BinOp::Lt => "<",
+            BinOp::Gt => ">",
+            BinOp::Le => "<=",
+            BinOp::Ge => ">=",
+            BinOp::Eq => "==",
+            BinOp::Ne => "!=",
         }
     }
 
-    /// Binding power, from loosest (1) to tightest (9).
+    /// Binding power, from loosest (1) to tightest (13).
     pub fn precedence(&self) -> u8 {
         match self {
-            BinOp::Subset | BinOp::Equals => 1,
+            BinOp::Subset
+            | BinOp::PSubset
+            | BinOp::Equals
+            | BinOp::In
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::Le
+            | BinOp::Ge
+            | BinOp::Eq
+            | BinOp::Ne => 1,
             BinOp::Iff => 2,
             BinOp::Implies => 3,
             BinOp::Or | BinOp::Nor => 4,
@@ -72,6 +112,9 @@ impl BinOp {
             BinOp::Union | BinOp::Difference | BinOp::SymDiff => 7,
             BinOp::Intersect => 8,
             BinOp::Cross => 9,
+            BinOp::Add | BinOp::Sub => 10,
+            BinOp::Mul | BinOp::Div | BinOp::Rem => 11,
+            BinOp::Pow => 13,
         }
     }
 
@@ -89,12 +132,37 @@ impl BinOp {
         )
     }
 
+    /// Every operator whose result is a Boolean but whose operands are not.
     pub fn is_comparison(&self) -> bool {
-        matches!(self, BinOp::Subset | BinOp::Equals)
+        matches!(
+            self,
+            BinOp::Subset
+                | BinOp::PSubset
+                | BinOp::Equals
+                | BinOp::In
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::Le
+                | BinOp::Ge
+                | BinOp::Eq
+                | BinOp::Ne
+        )
+    }
+
+    pub fn is_arith(&self) -> bool {
+        matches!(
+            self,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::Pow
+        )
+    }
+
+    /// `<`, `>`, `<=`, `>=`: numbers only.
+    pub fn is_ordering(&self) -> bool {
+        matches!(self, BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge)
     }
 
     pub fn right_assoc(&self) -> bool {
-        matches!(self, BinOp::Implies)
+        matches!(self, BinOp::Implies | BinOp::Pow)
     }
 }
 

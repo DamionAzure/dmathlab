@@ -1638,3 +1638,319 @@ pub fn degree_sequence(g: &GraphVal) -> Vec<i64> {
     d.sort_unstable_by(|a, b| b.cmp(a));
     d
 }
+
+// ===========================================================================
+// Graph structure: complement, diameter, bridges, cut vertices, Hamiltonicity,
+// chromatic number
+// ===========================================================================
+
+/// Largest vertex count IS_HAMILTONIAN will search (bitmask DP: 2^n · n).
+pub const MAX_HAMILTONIAN_VERTICES: usize = 20;
+/// Work budget for the exact chromatic-number search.
+const CHROMATIC_BUDGET: u64 = 5_000_000;
+/// Largest graph BRIDGES / CUT_VERTICES examine (vertices + edges).
+pub const MAX_STRUCTURE_SIZE: usize = 3_000;
+
+/// The complement graph: same vertices, an edge exactly where `g` has none
+/// (no self-loops, weights dropped; directed graphs complement the arcs).
+pub fn graph_complement(g: &GraphVal) -> GraphVal {
+    let present: BTreeSet<(i64, i64)> = g
+        .edges
+        .iter()
+        .map(|e| if g.directed { (e.from, e.to) } else { ukey(e.from, e.to) })
+        .collect();
+    let mut edges = Vec::new();
+    for &a in &g.vertices {
+        for &b in &g.vertices {
+            if a == b || (!g.directed && a > b) {
+                continue;
+            }
+            if !present.contains(&(a, b)) {
+                edges.push(Edge { from: a, to: b, weight: None });
+            }
+        }
+    }
+    GraphVal { directed: g.directed, vertices: g.vertices.clone(), edges, origin: Some(GraphOrigin::Literal) }
+}
+
+/// Longest shortest path, counted in edges. `Err` says why it is undefined.
+pub fn diameter(g: &GraphVal) -> Result<i64, &'static str> {
+    if g.vertices.is_empty() {
+        return Err("the graph has no vertices");
+    }
+    let adj = adjacency(g, false);
+    let mut best = 0i64;
+    for &s in &g.vertices {
+        let mut dist: BTreeMap<i64, i64> = BTreeMap::new();
+        dist.insert(s, 0);
+        let mut q = VecDeque::from([s]);
+        while let Some(v) = q.pop_front() {
+            let d = dist[&v];
+            for &w in &adj[&v] {
+                if !dist.contains_key(&w) {
+                    dist.insert(w, d + 1);
+                    q.push_back(w);
+                }
+            }
+        }
+        if dist.len() != g.vertices.len() {
+            return Err(if g.directed {
+                "some vertex cannot reach another (the digraph is not strongly connected)"
+            } else {
+                "the graph is not connected"
+            });
+        }
+        best = best.max(dist.values().copied().max().unwrap_or(0));
+    }
+    Ok(best)
+}
+
+fn components_without(g: &GraphVal, skip_vertex: Option<i64>, skip_edge: Option<(i64, i64)>) -> usize {
+    let mut adj: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    for &v in &g.vertices {
+        if Some(v) != skip_vertex {
+            adj.insert(v, BTreeSet::new());
+        }
+    }
+    for e in &g.edges {
+        if Some(e.from) == skip_vertex || Some(e.to) == skip_vertex || e.from == e.to {
+            continue;
+        }
+        if skip_edge == Some(ukey(e.from, e.to)) {
+            continue;
+        }
+        adj.entry(e.from).or_default().insert(e.to);
+        adj.entry(e.to).or_default().insert(e.from);
+    }
+    let mut seen: BTreeSet<i64> = BTreeSet::new();
+    let mut count = 0;
+    for &v in adj.keys() {
+        if seen.contains(&v) {
+            continue;
+        }
+        count += 1;
+        for u in bfs_adj(&adj, v) {
+            seen.insert(u);
+        }
+    }
+    count
+}
+
+/// Edges whose removal splits a component (undirected graphs), as `(a, b)`
+/// with `a < b`, in ascending order.
+pub fn bridges(g: &GraphVal) -> Vec<(i64, i64)> {
+    let base = components_without(g, None, None);
+    let mut out: Vec<(i64, i64)> = g
+        .edges
+        .iter()
+        .filter(|e| e.from != e.to)
+        .map(|e| ukey(e.from, e.to))
+        .filter(|&k| components_without(g, None, Some(k)) > base)
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Vertices whose removal splits a component (undirected graphs).
+pub fn cut_vertices(g: &GraphVal) -> Vec<i64> {
+    let base = components_without(g, None, None);
+    g.vertices
+        .iter()
+        .copied()
+        .filter(|&v| {
+            // Removing an isolated vertex lowers the count; a cut vertex raises it
+            // relative to the count with that vertex's own component kept whole.
+            let others = components_without(g, Some(v), None);
+            let isolated = adjacency(g, true)[&v].iter().all(|&w| w == v);
+            let expected = if isolated { base - 1 } else { base };
+            others > expected
+        })
+        .collect()
+}
+
+/// Does the graph contain a cycle through every vertex exactly once?
+/// The caller has checked `vertices.len() <= MAX_HAMILTONIAN_VERTICES`.
+pub fn is_hamiltonian(g: &GraphVal) -> bool {
+    let n = g.vertices.len();
+    if n < if g.directed { 2 } else { 3 } {
+        return false;
+    }
+    let idx: BTreeMap<i64, usize> = g.vertices.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+    let adj = adjacency(g, false);
+    let mut out_mask = vec![0u32; n];
+    for (&v, ns) in &adj {
+        for &w in ns {
+            if w != v {
+                out_mask[idx[&v]] |= 1 << idx[&w];
+            }
+        }
+    }
+    // dp[mask] = set of end vertices of a path that starts at vertex 0 and visits `mask`.
+    let full = (1usize << n) - 1;
+    let mut dp = vec![0u32; 1 << n];
+    dp[1] = 1;
+    for mask in 1..=full {
+        if mask & 1 == 0 || dp[mask] == 0 {
+            continue;
+        }
+        for last in 0..n {
+            if dp[mask] & (1 << last) == 0 {
+                continue;
+            }
+            let mut nexts = out_mask[last] & !(mask as u32);
+            while nexts != 0 {
+                let w = nexts.trailing_zeros() as usize;
+                nexts &= nexts - 1;
+                dp[mask | (1 << w)] |= 1 << w;
+            }
+        }
+    }
+    (0..n).any(|last| dp[full] & (1 << last) != 0 && out_mask[last] & 1 != 0)
+}
+
+/// Smallest k such that the graph (directions ignored) is k-colorable;
+/// `None` when the search budget runs out.
+pub fn chromatic_number(g: &GraphVal) -> Option<i64> {
+    if g.vertices.is_empty() {
+        return Some(0);
+    }
+    let adj = adjacency(g, true);
+    let mut order: Vec<i64> = g.vertices.iter().copied().collect();
+    order.sort_by_key(|v| std::cmp::Reverse(adj[v].len()));
+    let mut budget = CHROMATIC_BUDGET;
+    for k in 1..=order.len() as i64 {
+        let mut colors: BTreeMap<i64, i64> = BTreeMap::new();
+        match try_color(&order, 0, k, &adj, &mut colors, &mut budget) {
+            Some(true) => return Some(k),
+            Some(false) => continue,
+            None => return None,
+        }
+    }
+    Some(order.len() as i64)
+}
+
+fn try_color(
+    order: &[i64],
+    i: usize,
+    k: i64,
+    adj: &BTreeMap<i64, BTreeSet<i64>>,
+    colors: &mut BTreeMap<i64, i64>,
+    budget: &mut u64,
+) -> Option<bool> {
+    if i == order.len() {
+        return Some(true);
+    }
+    let v = order[i];
+    let used: BTreeSet<i64> = adj[&v].iter().filter_map(|w| colors.get(w).copied()).collect();
+    // Symmetry breaking: never open more than one new color at a time.
+    let max_used = colors.values().copied().max().map(|m| m + 1).unwrap_or(0);
+    for c in 0..k.min(max_used + 1) {
+        if used.contains(&c) {
+            continue;
+        }
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        colors.insert(v, c);
+        match try_color(order, i + 1, k, adj, colors, budget) {
+            Some(true) => return Some(true),
+            None => return None,
+            Some(false) => {}
+        }
+        colors.remove(&v);
+    }
+    Some(false)
+}
+
+// ===========================================================================
+// Number theory and counting: sigma, order, bases, partitions, Bell numbers
+// ===========================================================================
+
+/// Sum of the positive divisors of `n` (σ(n)); `None` on overflow.
+pub fn sigma(n: i64) -> Option<i64> {
+    let mut total: i128 = 0;
+    for d in divisors(n) {
+        total += d as i128;
+    }
+    to_i64(total)
+}
+
+/// Multiplicative order of `a` modulo `m` (m ≥ 2, gcd(a, m) = 1): the least
+/// k ≥ 1 with a^k ≡ 1 (mod m). Found by shrinking φ(m) one prime at a time.
+pub fn mult_order(a: i64, m: i64) -> i64 {
+    let a = modulo(a, m);
+    let mut k = totient(m as u64);
+    for p in group_primes(&prime_factors(k)) {
+        while k % p == 0 && modpow(a, k / p, m) == 1 {
+            k /= p;
+        }
+    }
+    k as i64
+}
+
+fn group_primes(f: &[u64]) -> Vec<u64> {
+    let mut v = f.to_vec();
+    v.dedup();
+    v
+}
+
+/// Digits of `n` (≥ 0) in `base` (2..=36), most significant first.
+pub fn to_base(n: i64, base: i64) -> Vec<i64> {
+    if n == 0 {
+        return vec![0];
+    }
+    let mut digits = Vec::new();
+    let mut x = n;
+    while x > 0 {
+        digits.push(x % base);
+        x /= base;
+    }
+    digits.reverse();
+    digits
+}
+
+/// Value of the digits (most significant first) in `base`; `None` on overflow.
+pub fn from_base(digits: &[i64], base: i64) -> Option<i64> {
+    let mut acc: i128 = 0;
+    for &d in digits {
+        acc = acc * base as i128 + d as i128;
+        if acc > i64::MAX as i128 {
+            return None;
+        }
+    }
+    to_i64(acc)
+}
+
+/// Number of integer partitions p(n); `None` on overflow.
+pub fn partitions_checked(n: usize) -> Option<i64> {
+    let mut p = vec![0i128; n + 1];
+    p[0] = 1;
+    for part in 1..=n {
+        for s in part..=n {
+            p[s] += p[s - part];
+            if p[s] > i64::MAX as i128 {
+                return None;
+            }
+        }
+    }
+    to_i64(p[n])
+}
+
+/// Bell number B(n) (set partitions) by the Bell triangle; `None` on overflow.
+pub fn bell_checked(n: usize) -> Option<i64> {
+    if n > 40 {
+        return None; // the triangle's rows would overflow i128
+    }
+    let mut row: Vec<i128> = vec![1];
+    for _ in 0..n {
+        let mut next: Vec<i128> = vec![*row.last().unwrap()];
+        for &x in &row {
+            let v = next.last().unwrap() + x;
+            next.push(v);
+        }
+        row = next;
+    }
+    to_i64(row[0])
+}

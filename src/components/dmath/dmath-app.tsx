@@ -33,17 +33,10 @@ import { ExportableCard } from "@/components/dmath/export-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { CodeEditor, type CodeEditorHandle } from "@/components/dmath/code-editor";
 import { SymbolBar } from "./symbol-bar";
+import { EasyPanel } from "./easy-panel";
+import { ConfirmModal, ExampleModal } from "./modals";
 import { ShortcutsDialog } from "./shortcuts-dialog";
 import { saveOrDownload, sessionToMarkdown } from "@/lib/dmath/export";
 import { OutputPanel } from "@/components/dmath/output-panel";
@@ -60,7 +53,6 @@ import { PascalView } from "@/components/dmath/viz/pascal-view";
 import { StepsView } from "@/components/dmath/viz/steps-view";
 import { loadEngine, type DMathEngine } from "@/lib/dmath/engine";
 import {
-  confirmDiscard,
   fileName,
   listenDesktop,
   openFileDialog,
@@ -112,6 +104,21 @@ export function DMathApp() {
   const [initial] = useState(() => loadInitialSource() ?? DEFAULT_EXAMPLE.code);
   const [source, setSource] = useState(initial);
   const editorRef = useRef<CodeEditorHandle>(null);
+  const [easy, setEasy] = useState(() => {
+    try {
+      return localStorage.getItem("kaylei.mode") !== "code";
+    } catch {
+      return true;
+    }
+  });
+  const chooseMode = (e: boolean) => {
+    setEasy(e);
+    try {
+      localStorage.setItem("kaylei.mode", e ? "easy" : "code");
+    } catch {
+      /* ignore */
+    }
+  };
   const [refOpen, setRefOpen] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
   const [welcome, setWelcome] = useState(() => {
@@ -196,12 +203,12 @@ export function DMathApp() {
     };
   }, []);
 
-  const run = useCallback(async () => {
+  const run = useCallback(async (text?: string) => {
     const eng = engineRef.current;
     if (!eng) return;
     setRunning(true);
     try {
-      setEnvelope(await eng.run(source));
+      setEnvelope(await eng.run(typeof text === "string" ? text : source));
     } catch (e) {
       setEngineError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -211,10 +218,10 @@ export function DMathApp() {
 
   // Auto-run the default example once the engine is ready.
   useEffect(() => {
-    if (engine && envelope === null && !engineError) {
+    if (engine && envelope === null && !engineError && !easy) {
       run();
     }
-  }, [engine, envelope, engineError, run]);
+  }, [engine, envelope, engineError, run, easy]);
 
   const errorLines = useMemo(() => {
     if (!envelope) return [];
@@ -234,7 +241,15 @@ export function DMathApp() {
   latest.current = { source, filePath, dirty };
 
   /** True if it is fine to replace the current text (saved, or user agreed). */
-  const canReplace = async () => !latest.current.dirty || (await confirmDiscard());
+  // In-app confirmation (works on Android too, where there is no native dialog).
+  const [confirmAsk, setConfirmAsk] = useState<((ok: boolean) => void) | null>(null);
+  const confirmDiscardLocal = () => new Promise<boolean>((resolve) => setConfirmAsk(() => resolve));
+  const answerConfirm = (ok: boolean) => {
+    confirmAsk?.(ok);
+    setConfirmAsk(null);
+  };
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const canReplace = async () => !latest.current.dirty || (await confirmDiscardLocal());
 
   const adopt = (f: OpenedFile) => {
     setSource(f.contents);
@@ -348,7 +363,7 @@ export function DMathApp() {
   return (
     <div className="flex min-h-screen w-full max-w-full flex-col overflow-x-clip bg-zinc-100 text-zinc-900">
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-zinc-200/80 bg-white/80 backdrop-blur-md">
+      <header className="sticky top-0 z-30 pt-[env(safe-area-inset-top)] border-b border-zinc-200/80 bg-white/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-[1680px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
             <img src={kayleiIcon} alt="" className="h-9 w-9 shrink-0" />
@@ -433,7 +448,7 @@ export function DMathApp() {
               <CardHeader className="flex flex-row flex-wrap items-center gap-2 space-y-0 pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm font-bold">
                   <IconTile icon={Braces} />
-                  DSL Editor
+                  {easy ? "Easy Mode" : "DSL Editor"}
                   {(filePath || dirty) && (
                     <span className="max-w-[180px] truncate font-mono text-[11px] font-normal text-zinc-500">
                       {fileName(filePath) ?? "Untitled"}
@@ -442,40 +457,51 @@ export function DMathApp() {
                   )}
                 </CardTitle>
                 <div className="ml-auto flex flex-wrap items-center gap-2">
-                  <Select value={exampleId} onValueChange={loadExample}>
-                    <SelectTrigger
-                      className="h-8 w-[220px] max-w-full text-xs"
-                      aria-label="Load an example program"
-                    >
-                      <SelectValue placeholder="Examples…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXAMPLE_GROUPS.map((g) => (
-                        <SelectGroup key={g}>
-                          <SelectLabel className="text-xs">{g}</SelectLabel>
-                          {EXAMPLES.filter((e) => e.group === g).map((e) => (
-                            <SelectItem key={e.id} value={e.id} className="text-xs">
-                              {e.name}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="inline-flex rounded-lg border border-zinc-300 bg-zinc-100 p-0.5 text-xs font-semibold" role="group" aria-label="Mode">
+                    {[true, false].map((m) => (
+                      <button key={String(m)} type="button" onClick={() => chooseMode(m)} aria-pressed={easy === m}
+                        className={`rounded-md px-2.5 py-1 ${easy === m ? "bg-white text-emerald-700 shadow-sm" : "text-zinc-600"}`}>
+                        {m ? "Easy" : "Code"}
+                      </button>
+                    ))}
+                  </div>
+                  {!easy && (
+                    <Button variant="outline" size="sm" className="h-8 max-w-[220px] text-xs" onClick={() => setExamplesOpen(true)} aria-label="Load an example program">
+                      <span className="truncate">{EXAMPLES.find((e) => e.id === exampleId)?.name ?? "Examples…"}</span>
+                    </Button>
+                  )}
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
+                {easy ? (
+                  <EasyPanel
+                    running={running}
+                    ready={!!engine}
+                    onRun={(code) => {
+                      setSource(code);
+                      setSavedSource(code);
+                      setExampleId("");
+                      void run(code);
+                    }}
+                    onEditAsCode={(code) => {
+                      setSource(code);
+                      setExampleId("");
+                      chooseMode(false);
+                    }}
+                  />
+                ) : (
+                <>
                 <CodeEditor
                   value={source}
                   onChange={setSource}
                   errorLines={errorLines}
-                  onRun={run}
+                  onRun={() => run()}
                   ref={editorRef}
                 />
                 <SymbolBar onInsert={(t, back) => editorRef.current?.insert(t, back)} />
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
-                    onClick={run}
+                    onClick={() => run()}
                     disabled={!engine || running}
                     className="h-9 bg-gradient-to-b from-emerald-500 to-emerald-600 px-4 font-semibold text-white shadow-sm shadow-emerald-600/30 hover:from-emerald-500 hover:to-emerald-700"
                   >
@@ -514,6 +540,8 @@ export function DMathApp() {
                     Clear output
                   </Button>
                 </div>
+                </>
+                )}
               </CardContent>
             </Card>
 
@@ -603,6 +631,9 @@ export function DMathApp() {
         </div>
       </main>
       <ShortcutsDialog open={keysOpen} onClose={() => setKeysOpen(false)} />
+      <ExampleModal open={examplesOpen} currentId={exampleId} onClose={() => setExamplesOpen(false)}
+        onPick={(id) => { setExamplesOpen(false); void loadExample(id); }} />
+      <ConfirmModal open={confirmAsk !== null} message="You have unsaved changes. Discard them?" confirmLabel="Discard" onResult={answerConfirm} />
       <ReferenceDialog open={refOpen} onClose={() => setRefOpen(false)} onTry={(code) => setSource(code)} />
 
     </div>

@@ -58,7 +58,39 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             '}' => push_simple(&mut toks, TokKind::RBrace, "}", &mut i, line, &mut col),
             '(' => push_simple(&mut toks, TokKind::LParen, "(", &mut i, line, &mut col),
             ')' => push_simple(&mut toks, TokKind::RParen, ")", &mut i, line, &mut col),
+            '=' if i + 1 < n && chars[i + 1] == '=' => {
+                toks.push(Token { kind: TokKind::EqEq, text: "==".into(), line, col });
+                i += 2;
+                col += 2;
+            }
+            '<' if i + 1 < n && chars[i + 1] == '=' => {
+                toks.push(Token { kind: TokKind::Le, text: "<=".into(), line, col });
+                i += 2;
+                col += 2;
+            }
+            '>' if i + 1 < n && chars[i + 1] == '=' => {
+                toks.push(Token { kind: TokKind::Ge, text: ">=".into(), line, col });
+                i += 2;
+                col += 2;
+            }
+            '!' if i + 1 < n && chars[i + 1] == '=' => {
+                toks.push(Token { kind: TokKind::Ne, text: "!=".into(), line, col });
+                i += 2;
+                col += 2;
+            }
+            '.' if i + 1 < n && chars[i + 1] == '.' => {
+                toks.push(Token { kind: TokKind::DotDot, text: "..".into(), line, col });
+                i += 2;
+                col += 2;
+            }
             '=' => push_simple(&mut toks, TokKind::Assign, "=", &mut i, line, &mut col),
+            '<' => push_simple(&mut toks, TokKind::Lt, "<", &mut i, line, &mut col),
+            '>' => push_simple(&mut toks, TokKind::Gt, ">", &mut i, line, &mut col),
+            '+' => push_simple(&mut toks, TokKind::Plus, "+", &mut i, line, &mut col),
+            '*' => push_simple(&mut toks, TokKind::Star, "*", &mut i, line, &mut col),
+            '/' => push_simple(&mut toks, TokKind::Slash, "/", &mut i, line, &mut col),
+            '%' => push_simple(&mut toks, TokKind::Percent, "%", &mut i, line, &mut col),
+            '^' => push_simple(&mut toks, TokKind::Caret, "^", &mut i, line, &mut col),
             ',' => push_simple(&mut toks, TokKind::Comma, ",", &mut i, line, &mut col),
             ';' => push_simple(&mut toks, TokKind::Semicolon, ";", &mut i, line, &mut col),
             '-' => push_simple(&mut toks, TokKind::Minus, "-", &mut i, line, &mut col),
@@ -99,7 +131,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                     format!("Unexpected character '{}'.", other),
                 )
                 .with_hint(
-                    "DMath supports letters, digits, spaces and the symbols = { } ( ) , ; - #",
+                    "DMath supports letters, digits, spaces and the symbols = == != < > <= >= + - * / % ^ .. { } ( ) , ; #",
                 ));
             }
         }

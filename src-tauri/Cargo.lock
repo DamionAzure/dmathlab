@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "dmath-lab"
-version = "0.3.0"
+version = "0.5.2"
 dependencies = [
  "base64 0.21.7",
  "dmath-core",

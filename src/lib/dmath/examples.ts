@@ -134,6 +134,24 @@ DISPLAY IS_DISJOINT(A, B)
 VISUALIZE C AS VENN`,
   },
   {
+    id: "sets-arith",
+    group: "Set Theory",
+    name: "Arithmetic, Ranges and Comparisons",
+    description: "{1..n}, SUM / MIN / MAX, IN, PSUBSET and numeric tests",
+    code: `# Ranges build big sets in one go
+S = {1..10}
+EVENS = {2, 4, 6, 8, 10}
+
+DISPLAY SUM(S), MIN(S), MAX(S)
+DISPLAY 4 IN EVENS, 5 IN EVENS
+DISPLAY EVENS PSUBSET S
+
+# Arithmetic: ^ first, then * / %, then + -
+n = SUM(S)
+DISPLAY n / 10, n % 10, 2 ^ 10 - 1
+DISPLAY n > 50 AND n <= 55`,
+  },
+  {
     id: "sets-powerset",
     group: "Set Theory",
     name: "Power Set",
@@ -337,6 +355,85 @@ DISPLAY DERANGE(4)       # 9 ways to hand back 4 hats, nobody gets their own
 DISPLAY STIRLING2(5, 2)  # 15 ways to split 5 people into 2 teams`,
   },
   {
+    id: "numbers-bases",
+    group: "Number Theory",
+    name: "Bases, Divisor Sums and Orders",
+    description: "TO_BASE, FROM_BASE, SIGMA, ORDER_MOD",
+    code: `# Writing numbers in other bases
+DISPLAY TO_BASE(10, 2)
+DISPLAY TO_BASE(255, 16)
+DISPLAY FROM_BASE(1010, 2)
+DISPLAY FROM_BASE(TO_BASE(2026, 8), 8)
+
+# Sum of divisors: perfect numbers satisfy SIGMA(n) = 2n
+DISPLAY SIGMA(6) == 12
+DISPLAY SIGMA(28) == 56
+
+# How long until powers of 3 wrap around to 1 (mod 7)?
+DISPLAY ORDER_MOD(3, 7)
+DISPLAY MODPOW(3, ORDER_MOD(3, 7), 7)`,
+  },
+  {
+    id: "counting-partitions",
+    group: "Combinatorics",
+    name: "Partitions and Bell Numbers",
+    description: "PARTITIONS, BELL and inclusion–exclusion",
+    code: `DISPLAY PARTITIONS(4)    # 5: 4, 3+1, 2+2, 2+1+1, 1+1+1+1
+DISPLAY PARTITIONS(100)
+DISPLAY BELL(4)          # 15 ways to split 4 items into groups
+
+# Bell numbers add up Stirling numbers of the second kind
+DISPLAY BELL(4) == STIRLING2(4,1) + STIRLING2(4,2) + STIRLING2(4,3) + STIRLING2(4,4)
+
+# Inclusion–exclusion, with a worked solution
+A = {1, 2, 3, 4}
+B = {3, 4, 5}
+C = {4, 5, 6}
+N = SIZE(A UNION B UNION C)
+DISPLAY N
+VISUALIZE N AS STEPS`,
+  },
+  {
+    id: "graphs-structure",
+    group: "Graph Theory",
+    name: "Graph Structure — bridges, diameter, coloring",
+    description: "Complement, diameter, bridges, cut vertices, Hamiltonian, chromatic number and the adjacency matrix",
+    code: `# Two triangles joined by a single edge
+G = GRAPH {1,2,3,4,5,6} {(1,2), (2,3), (1,3), (3,4), (4,5), (5,6), (4,6)}
+
+DISPLAY DIAMETER(G)
+DISPLAY BRIDGES(G)
+DISPLAY CUT_VERTICES(G)
+DISPLAY CHROMATIC_NUMBER(G)
+DISPLAY IS_HAMILTONIAN(G)
+
+H = GRAPH_COMPLEMENT(G)
+DISPLAY SIZE(EDGES(H))
+
+VISUALIZE G AS MATRIX`,
+  },
+  {
+    id: "steps-sets-relations",
+    group: "Set Theory",
+    name: "Worked Solutions — sets, orders and closures",
+    description: "AS STEPS for SYMDIFF, POWERSET, TOPO_SORT and a transitive closure",
+    code: `A = {1, 2, 3, 4}
+B = {3, 4, 5}
+C = A SYMDIFF B
+VISUALIZE C AS STEPS
+
+P = POWERSET({1, 2, 3})
+VISUALIZE P AS STEPS
+
+D = DIGRAPH {1,2,3,4,5} {(1,2), (1,3), (2,4), (3,4), (4,5)}
+T = TOPO_SORT(D)
+VISUALIZE T AS STEPS
+
+R = {(1,2), (2,3), (3,4)}
+TC = TRANSITIVE_CLOSURE(R)
+VISUALIZE TC AS STEPS`,
+  },
+  {
     id: "graphs-dag",
     group: "Graph Theory",
     name: "Graphs — ordering tasks & components",
@@ -374,6 +471,28 @@ X = TYP0 OR TRUE
 B = {2, 3}
 C = A INTERSECT B
 DISPLAY C`,
+  },
+  {
+    id: "relations-functions",
+    group: "Relations",
+    name: "Functions and Equivalence Classes",
+    description: "DOMAIN, RANGE, injective / surjective / bijective, CLASSES",
+    code: `# A function is a relation with one output per input
+F = {(1, 4), (2, 5), (3, 6)}
+DISPLAY DOMAIN(F), RANGE(F)
+DISPLAY IS_FUNCTION(F, {1, 2, 3})
+DISPLAY IS_INJECTIVE(F)
+DISPLAY IS_SURJECTIVE(F, {4, 5, 6})
+DISPLAY IS_BIJECTIVE(F, {4, 5, 6})
+
+# Two inputs share an output, so G is not one-to-one
+G = {(1, 4), (2, 4)}
+DISPLAY IS_INJECTIVE(G)
+
+# Equivalence classes split a set into a partition
+R = {(1,1), (2,2), (3,3), (1,2), (2,1)}
+DISPLAY CLASSES(R)
+DISPLAY CLASS_OF(R, 2)`,
   },
   {
     id: "relations-basics",
